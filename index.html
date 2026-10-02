@@ -49,7 +49,12 @@
         <span>Temas</span>
       </button>
 
-      <span class="nav-label">Matérias</span>
+      <span class="nav-label nav-label-row">
+        Matérias
+        <button class="nav-label-btn" data-action="open-subjects" title="Gerenciar matérias">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+        </button>
+      </span>
       <div class="subject-filter" id="sidebar-subjects"></div>
     </nav>
 
@@ -168,6 +173,10 @@
               </select>
             </label>
             <button class="btn btn-ghost" data-action="clear-filters">Limpar filtros</button>
+            <button class="btn btn-ghost" data-action="open-subjects">
+              <svg viewBox="0 0 24 24"><path d="M4 6h4v12H4zM10 6h4v12h-4zM16 9h4v9h-4z" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>
+              <span>Matérias</span>
+            </button>
             <label class="switch">
               <input type="checkbox" id="filter-overdue">
               <span>Só atrasadas</span>
@@ -333,6 +342,35 @@
       <button type="submit" class="btn btn-primary">Salvar tarefa</button>
     </footer>
   </form>
+</div>
+
+<div class="modal" id="subject-modal" role="dialog" aria-modal="true" aria-labelledby="subject-modal-title">
+  <header class="modal-head">
+    <h2 id="subject-modal-title">Gerenciar matérias</h2>
+    <button class="icon-btn" data-close aria-label="Fechar">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+  <div class="modal-body">
+    <p class="modal-hint muted">Renomear atualiza as tarefas e tags de notas. Excluir não apaga tarefas — elas ficam sem matéria.</p>
+
+    <form class="sm-add" id="subject-add-form">
+      <input type="text" id="subject-new" placeholder="Nova matéria (ex.: Rust)" maxlength="40" autocomplete="off">
+      <button type="submit" class="btn btn-primary">Adicionar</button>
+    </form>
+
+    <label class="search sm-search">
+      <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      <input type="search" id="subject-search" placeholder="Filtrar matérias..." autocomplete="off">
+    </label>
+
+    <ul class="subject-manager" id="subject-manager"></ul>
+
+    <footer class="modal-foot">
+      <span class="muted sm-foot"><span id="subject-count">0</span> matérias</span>
+      <button class="btn btn-ghost" data-close>Fechar</button>
+    </footer>
+  </div>
 </div>
 
 <div class="modal" id="confirm-modal" role="dialog" aria-modal="true">

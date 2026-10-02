@@ -2,7 +2,8 @@
 const K = {
   tasks: 'studytrack.tasks',
   notes: 'studytrack.notes',
-  prefs: 'studytrack.prefs'
+  prefs: 'studytrack.prefs',
+  subjects: 'studytrack.subjects'
 };
 
 const load = (k, fallback) => {
@@ -66,18 +67,47 @@ const defaultPrefs = {
 let tasks = load(K.tasks, []);
 let notes = load(K.notes, []);
 let prefs = Object.assign({}, defaultPrefs, load(K.prefs, {}));
+
+const slug = name => String(name || '').trim().toLowerCase();
+
+function migrateSubjects() {
+  const set = new Set(SUBJECTS_DEFAULT);
+  tasks.forEach(t => t.subject && set.add(t.subject));
+  const list = Array.from(set);
+  save(K.subjects, list);
+  return list;
+}
+
+let subjects = (() => {
+  const stored = load(K.subjects, null);
+  if (Array.isArray(stored) && stored.length) {
+    return Array.from(new Set(stored.map(s => String(s).trim()).filter(Boolean)));
+  }
+  return migrateSubjects();
+})();
+
+const findSubject = name => subjects.find(s => s.toLowerCase() === slug(name));
+
 let ui = {
   view: 'dashboard',
   search: '',
   filters: { subject: '', priority: '', status: 'pending', overdue: false, sort: 'smart' },
   editingTaskId: null,
   activeNoteId: notes[0]?.id || null,
+  editingSubject: null,
+  subjectSearch: '',
   confirmAction: null
 };
 
-const persistAll = () => { save(K.tasks, tasks); save(K.notes, notes); save(K.prefs, prefs); };
+const persistAll = () => {
+  save(K.tasks, tasks);
+  save(K.notes, notes);
+  save(K.prefs, prefs);
+  save(K.subjects, subjects);
+};
 const persistTasks = () => save(K.tasks, tasks);
 const persistNotes = () => save(K.notes, notes);
+const persistSubjects = () => save(K.subjects, subjects);
 
 /* ================= dom ================= */
 const $ = sel => document.querySelector(sel);
@@ -220,19 +250,169 @@ function renderThemeGrid() {
     </button>`).join('');
 }
 
-/* ================= tasks ================= */
+/* ================= subjects ================= */
+const nextColor = () => {
+  const used = Object.values(prefs.subjectColors);
+  const free = SUBJECT_COLORS.find(c => !used.includes(c));
+  return free || SUBJECT_COLORS[subjects.length % SUBJECT_COLORS.length];
+};
+
+const subjectTasks = name => tasks.filter(t => slug(t.subject) === slug(name));
+
 const allSubjects = () => {
-  const set = new Set(SUBJECTS_DEFAULT);
-  tasks.forEach(t => t.subject && set.add(t.subject));
-  return Array.from(set).sort((a, b) => a.localeCompare(b, 'pt-BR'));
+  const known = new Set(subjects.map(slug));
+  const strays = tasks
+    .map(t => t.subject)
+    .filter(s => s && !known.has(slug(s)));
+  return Array.from(new Set([...subjects, ...strays]));
 };
 
 const subjectColor = s => {
   if (prefs.subjectColors[s]) return prefs.subjectColors[s];
+  const match = findSubject(s) || s;
+  if (prefs.subjectColors[match]) return prefs.subjectColors[match];
   const list = allSubjects();
-  return SUBJECT_COLORS[list.indexOf(s) % SUBJECT_COLORS.length];
+  const idx = list.findIndex(x => slug(x) === slug(s));
+  return SUBJECT_COLORS[(idx < 0 ? 0 : idx) % SUBJECT_COLORS.length];
 };
 
+function addSubject(name) {
+  const clean = String(name || '').trim();
+  if (!clean) return { ok: false, error: 'Digite um nome para a matéria.' };
+  if (clean.length > 40) return { ok: false, error: 'Use no máximo 40 caracteres.' };
+  if (findSubject(clean)) return { ok: false, error: `"${clean}" já existe.` };
+  subjects.push(clean);
+  prefs.subjectColors[clean] = nextColor();
+  persistSubjects();
+  save(K.prefs, prefs);
+  renderAll();
+  setStatus(`Matéria "${clean}" adicionada`);
+  return { ok: true, name: clean };
+}
+
+function renameSubject(oldName, newName) {
+  const from = findSubject(oldName);
+  const clean = String(newName || '').trim();
+  if (!from) return { ok: false, error: 'Matéria não encontrada.' };
+  if (!clean) return { ok: false, error: 'Digite um nome para a matéria.' };
+  if (clean.length > 40) return { ok: false, error: 'Use no máximo 40 caracteres.' };
+  const clash = findSubject(clean);
+  if (clash && clash !== from) return { ok: false, error: `"${clean}" já existe.` };
+  if (clean === from) return { ok: true, name: from };
+
+  const idx = subjects.indexOf(from);
+  subjects[idx] = clean;
+  if (prefs.subjectColors[from]) {
+    prefs.subjectColors[clean] = prefs.subjectColors[from];
+    delete prefs.subjectColors[from];
+  } else {
+    prefs.subjectColors[clean] = nextColor();
+  }
+
+  let taskHits = 0;
+  tasks.forEach(t => {
+    if (slug(t.subject) === slug(from)) { t.subject = clean; taskHits++; }
+  });
+
+  let noteHits = 0;
+  notes.forEach(n => {
+    if (!Array.isArray(n.tags)) return;
+    n.tags = n.tags.map(tag => {
+      if (slug(tag) !== slug(from)) return tag;
+      noteHits++;
+      return clean;
+    });
+  });
+
+  if (ui.filters.subject === from) ui.filters.subject = clean;
+  if (el('filter-subject').value === from) el('filter-subject').value = clean;
+
+  persistAll();
+  renderAll();
+  setStatus(`Matéria renomeada para "${clean}"`);
+  return { ok: true, name: clean, taskHits, noteHits };
+}
+
+function deleteSubject(name) {
+  const target = findSubject(name);
+  if (!target) return { ok: false, error: 'Matéria não encontrada.' };
+  if (subjects.length <= 1) return { ok: false, error: 'Mantenha ao menos uma matéria.' };
+
+  const detached = subjectTasks(target).length;
+  subjects = subjects.filter(s => s !== target);
+  tasks.forEach(t => {
+    if (slug(t.subject) === slug(target)) t.subject = '';
+  });
+  notes.forEach(n => {
+    if (Array.isArray(n.tags)) n.tags = n.tags.filter(tag => slug(tag) !== slug(target));
+  });
+  delete prefs.subjectColors[target];
+  if (ui.filters.subject === target) ui.filters.subject = '';
+
+  persistAll();
+  renderAll();
+  return { ok: true, detached };
+}
+
+function commitSubjectRename() {
+  const pending = ui.editingSubject;
+  ui.editingSubject = null;
+  if (!pending) return;
+
+  if (pending.value.trim() === pending.original) {
+    renderSubjectManager();
+    return;
+  }
+
+  const res = renameSubject(pending.original, pending.value);
+  renderSubjectManager();
+
+  if (!res.ok) {
+    toast(res.error, 'warn');
+    return;
+  }
+  const details = [];
+  if (res.taskHits) details.push(`${res.taskHits} tarefa${res.taskHits !== 1 ? 's' : ''}`);
+  if (res.noteHits) details.push(`${res.noteHits} tag${res.noteHits !== 1 ? 's' : ''} de nota${res.noteHits !== 1 ? 's' : ''}`);
+  toast(`Matéria "${res.name}"${details.length ? ` · atualizou ${details.join(' e ')}` : ''}`, 'ok');
+}
+
+function openSubjectModal() {
+  ui.subjectSearch = '';
+  ui.editingSubject = null;
+  el('subject-search').value = '';
+  el('subject-new').value = '';
+  renderSubjectManager();
+  openModal('subject-modal');
+  el('subject-new').focus();
+}
+
+function renderSubjectManager() {
+  const box = el('subject-manager');
+  if (!box) return;
+  const q = ui.subjectSearch || '';
+  const list = allSubjects()
+    .filter(s => !q || s.toLowerCase().includes(slug(q)))
+    .sort((a, b) => a.localeCompare(b, 'pt-BR'));
+
+  box.innerHTML = list.length ? list.map(s => {
+    const pending = subjectTasks(s).filter(t => !t.done).length;
+    const total = subjectTasks(s).length;
+    return `
+      <li class="sm-row" data-subject-row="${escapeHtml(s)}">
+        <input type="color" class="sm-color" data-act="color" value="${subjectColor(s)}" title="Cor da matéria">
+        <input type="text" class="sm-name" data-act="name" value="${escapeHtml(s)}" maxlength="40" aria-label="Nome da matéria">
+        <span class="sm-count" title="${total} tarefa${total !== 1 ? 's' : ''} no total">${pending}<span class="muted">/${total}</span></span>
+        <button class="sm-btn" data-act="del" title="Excluir matéria">
+          <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </button>
+      </li>`;
+  }).join('') : '<li class="empty">Nenhuma matéria encontrada.</li>';
+
+  el('subject-count').textContent = allSubjects().length;
+}
+
+/* ================= tasks ================= */
 const isLate = t => !t.done && t.due && daysUntil(t.due) < 0;
 
 function filteredTasks() {
@@ -669,14 +849,18 @@ function seedData() {
       content: `Erros que mais caem em prova:\n\n- Mutável vs imutável: listas e dicts podem mudar in-place\n- Late binding em closures dentro de loops\n- \`is\` vs \`==\` para comparar strings vazias\n- Escopo de comprehension em Python 3`
     }
   ];
+  subjects = SUBJECTS_DEFAULT.slice();
+  prefs.subjectColors = {};
+  subjects.forEach((s, i) => { prefs.subjectColors[s] = SUBJECT_COLORS[i % SUBJECT_COLORS.length]; });
   persistAll();
   renderAll();
+  renderSubjectManager();
   closeModals();
   toast('Dados de exemplo carregados', 'ok');
 }
 
 function exportData() {
-  const blob = new Blob([JSON.stringify({ tasks, notes, prefs }, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ version: 1, tasks, notes, prefs, subjects }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `studytrack-${todayISO()}.json`;
@@ -693,6 +877,13 @@ function importData(file) {
       if (Array.isArray(data.tasks)) tasks = data.tasks;
       if (Array.isArray(data.notes)) notes = data.notes;
       if (data.prefs) prefs = Object.assign({}, defaultPrefs, data.prefs);
+      if (Array.isArray(data.subjects) && data.subjects.length) {
+        subjects = Array.from(new Set(data.subjects.map(s => String(s).trim()).filter(Boolean)));
+      } else {
+        subjects = migrateSubjects();
+      }
+      ui.filters.subject = '';
+      ui.activeNoteId = notes[0]?.id || null;
       persistAll();
       applyPrefs();
       renderAll();
@@ -709,10 +900,13 @@ function resetAll() {
     tasks = [];
     notes = [];
     prefs = Object.assign({}, defaultPrefs);
+    subjects = SUBJECTS_DEFAULT.slice();
     ui.activeNoteId = null;
+    ui.filters.subject = '';
     persistAll();
     applyPrefs();
     renderAll();
+    renderSubjectManager();
     toast('Dados apagados', 'warn');
   });
 }
@@ -732,6 +926,7 @@ function bindEvents() {
       const a = act.dataset.action;
       if (a === 'new-task') openTaskModal();
       if (a === 'new-note') createNote();
+      if (a === 'open-subjects') openSubjectModal();
       if (a === 'clear-filters') {
         ui.filters = { subject: '', priority: '', status: 'pending', overdue: false, sort: ui.filters.sort };
         el('filter-subject').value = '';
@@ -765,6 +960,26 @@ function bindEvents() {
 
     const themeCard = e.target.closest('[data-theme-id]');
     if (themeCard) setTheme(themeCard.dataset.themeId);
+
+    const smBtn = e.target.closest('.sm-btn[data-act="del"]');
+    if (smBtn) {
+      const row = smBtn.closest('.sm-row');
+      const name = row?.dataset.subjectRow;
+      if (!name) return;
+      const n = subjectTasks(name).length;
+      confirmAction(
+        'Excluir matéria',
+        `"${name}" será removida. ${n ? `${n} tarefa${n !== 1 ? 's' : ''} ficarão sem matéria` : 'Nenhuma tarefa usa esta matéria'} e a tag sai das notas.`,
+        () => {
+          const res = deleteSubject(name);
+          if (!res.ok) { toast(res.error, 'warn'); return; }
+          renderSubjectManager();
+          toast(`Matéria "${name}" excluída${res.detached ? ` · ${res.detached} tarefas sem matéria` : ''}`, 'warn');
+          setStatus(`Matéria "${name}" excluída`);
+        }
+      );
+      return;
+    }
 
     const chip = e.target.closest('[data-subject]');
     if (chip) {
@@ -824,6 +1039,63 @@ function bindEvents() {
   el('task-sort').addEventListener('change', e => { ui.filters.sort = e.target.value; renderTaskList(); });
 
   el('task-form').addEventListener('submit', e => { e.preventDefault(); saveTaskFromForm(); });
+  el('subject-add-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const input = el('subject-new');
+    const res = addSubject(input.value);
+    if (!res.ok) { toast(res.error, 'warn'); input.focus(); return; }
+    input.value = '';
+    renderSubjectManager();
+    toast(`Matéria "${res.name}" adicionada`, 'ok');
+    const row = el('subject-manager').querySelector('.sm-row:last-child');
+    if (row) { row.classList.add('is-flash'); row.querySelector('.sm-name').focus(); }
+  });
+
+  el('subject-search').addEventListener('input', e => {
+    ui.subjectSearch = e.target.value;
+    renderSubjectManager();
+  });
+
+  el('subject-manager').addEventListener('input', e => {
+    const field = e.target.closest('[data-act]');
+    if (!field) return;
+    const row = field.closest('.sm-row');
+    const name = row.dataset.subjectRow;
+
+    if (field.dataset.act === 'color') {
+      prefs.subjectColors[findSubject(name) || name] = field.value;
+      save(K.prefs, prefs);
+      renderSidebarSubjects();
+      renderTaskList();
+      renderSubjectBars();
+      return;
+    }
+
+    if (field.dataset.act === 'name') {
+      ui.editingSubject = { original: name, value: field.value };
+    }
+  });
+
+  el('subject-manager').addEventListener('keydown', e => {
+    const field = e.target.closest('.sm-name');
+    if (!field) return;
+    const pending = ui.editingSubject;
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      commitSubjectRename();
+    } else if (e.key === 'Escape') {
+      e.preventDefault();
+      ui.editingSubject = null;
+      renderSubjectManager();
+    } else if (e.key === 'Tab' && pending) {
+      commitSubjectRename();
+    }
+  });
+
+  el('subject-manager').addEventListener('focusout', e => {
+    if (e.target.closest('.sm-name') && ui.editingSubject) commitSubjectRename();
+  });
+
   el('confirm-ok').addEventListener('click', () => {
     const cb = ui.confirmAction;
     ui.confirmAction = null;
