@@ -60,6 +60,7 @@ const defaultPrefs = {
   density: 'normal',
   motion: 'on',
   font: 'system',
+  notesMode: 'split',
   accentCustom: false,
   subjectColors: {}
 };
@@ -213,6 +214,7 @@ function applyPrefs() {
   el('opt-font').value = prefs.font;
   const metaTheme = document.querySelector('meta[name="theme-color"]');
   if (metaTheme) metaTheme.setAttribute('content', prefs.theme === 'paper' ? '#f2f3f6' : '#0c0c0e');
+  if (el('editor-body')) setNotesMode(prefs.notesMode);
   renderThemeGrid();
 }
 
@@ -625,6 +627,133 @@ function renderRecentNotes() {
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
 
+/* ================= markdown ================= */
+const safeUrl = u => /^(https?:\/\/|mailto:|#|\/|\.{1,2}\/)/i.test(String(u).trim()) ? String(u).trim() : '#';
+
+const mdInline = raw => escapeHtml(raw)
+  .replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (_, alt, url) =>
+    `<img src="${safeUrl(url)}" alt="${alt}" loading="lazy">`)
+  .replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, txt, url) =>
+    `<a href="${safeUrl(url)}" target="_blank" rel="noopener noreferrer">${txt}</a>`)
+  .replace(/`([^`]+)`/g, '<code>$1</code>')
+  .replace(/\*\*\*([^*]+)\*\*\*/g, '<strong><em>$1</em></strong>')
+  .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+  .replace(/(^|[^*\w])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+  .replace(/(^|[^_\w])__([^_\n]+)__/g, '$1<strong>$2</strong>')
+  .replace(/(^|[^_\w])_([^_\n]+)_/g, '$1<em>$2</em>')
+  .replace(/~~([^~]+)~~/g, '<del>$1</del>')
+  .replace(/==([^=\n]+)==/g, '<mark>$1</mark>');
+
+function mdToHtml(md) {
+  const lines = String(md ?? '').replace(/\r\n?/g, '\n').split('\n');
+  const out = [];
+  let para = [];
+  let list = null;
+  let quote = false;
+  let i = 0;
+
+  const closePara = () => {
+    if (para.length) {
+      out.push(`<p>${mdInline(para.join(' '))}</p>`);
+      para = [];
+    }
+  };
+  const closeList = () => {
+    if (list) { out.push(`</${list}>`); list = null; }
+  };
+  const closeQuote = () => {
+    if (quote) { out.push('</blockquote>'); quote = false; }
+  };
+  const closeBlocks = () => { closePara(); closeList(); closeQuote(); };
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    const fence = line.match(/^```+\s*([\w+#.-]*)\s*$/);
+    if (fence) {
+      closeBlocks();
+      const lang = fence[1] || '';
+      const buf = [];
+      i++;
+      while (i < lines.length && !/^```+\s*$/.test(lines[i])) { buf.push(lines[i]); i++; }
+      i++;
+      out.push(`<pre data-lang="${escapeHtml(lang)}"><code>${escapeHtml(buf.join('\n'))}</code></pre>`);
+      continue;
+    }
+
+    const heading = line.match(/^(#{1,6})\s+(.*)$/);
+    if (heading) {
+      closeBlocks();
+      const level = Math.min(heading[1].length + 1, 6);
+      out.push(`<h${level}>${mdInline(heading[2].trim())}</h${level}>`);
+      i++;
+      continue;
+    }
+
+    if (/^([-*_])\s*(\1\s*){2,}$/.test(line)) {
+      closeBlocks();
+      out.push('<hr>');
+      i++;
+      continue;
+    }
+
+    if (/^>\s?/.test(line)) {
+      closePara();
+      closeList();
+      const inner = [];
+      if (!quote) { out.push('<blockquote>'); quote = true; }
+      while (i < lines.length && /^>\s?/.test(lines[i])) {
+        inner.push(lines[i].replace(/^>\s?/, ''));
+        i++;
+      }
+      out.push(mdToHtml(inner.join('\n')));
+      continue;
+    }
+
+    const task = line.match(/^[-*+]\s+\[([ xX])\]\s+(.*)$/);
+    if (task) {
+      closePara();
+      closeQuote();
+      if (list !== 'ul') { closeList(); out.push('<ul class="md-tasks">'); list = 'ul'; }
+      out.push(`<li><input type="checkbox" disabled${task[1].toLowerCase() === 'x' ? ' checked' : ''}><span>${mdInline(task[2])}</span></li>`);
+      i++;
+      continue;
+    }
+
+    const ul = line.match(/^[-*+]\s+(.*)$/);
+    if (ul) {
+      closePara();
+      closeQuote();
+      if (list !== 'ul') { closeList(); out.push('<ul>'); list = 'ul'; }
+      out.push(`<li>${mdInline(ul[1])}</li>`);
+      i++;
+      continue;
+    }
+
+    const ol = line.match(/^\d+[.)]\s+(.*)$/);
+    if (ol) {
+      closePara();
+      closeQuote();
+      if (list !== 'ol') { closeList(); out.push('<ol>'); list = 'ol'; }
+      out.push(`<li>${mdInline(ol[1])}</li>`);
+      i++;
+      continue;
+    }
+
+    if (!line.trim()) {
+      closeBlocks();
+      i++;
+      continue;
+    }
+
+    para.push(line.trim());
+    i++;
+  }
+
+  closeBlocks();
+  return out.join('');
+}
+
 function renderNoteList() {
   const q = ui.search.trim().toLowerCase();
   const list = [...notes]
@@ -645,7 +774,11 @@ function renderNoteList() {
 }
 
 function renderEditor() {
-  const n = notes.find(x => x.id === ui.activeNoteId);
+  let n = notes.find(x => x.id === ui.activeNoteId);
+  if (!n && notes.length) {
+    ui.activeNoteId = notes[0].id;
+    n = notes[0];
+  }
   const has = !!n;
   ['note-title', 'note-tags', 'note-content'].forEach(id => {
     el(id).disabled = !has;
@@ -658,18 +791,54 @@ function renderEditor() {
     el('note-tags').value = '';
     el('note-content').value = '';
     el('note-meta').textContent = '0 palavras • 0 caracteres';
+    renderPreview();
     return;
   }
   el('note-title').value = n.title;
   el('note-tags').value = n.tags.join(', ');
   el('note-content').value = n.content;
   updateNoteMeta();
+  renderPreview();
 }
 
 function updateNoteMeta() {
   const v = el('note-content').value;
   const words = v.trim() ? v.trim().split(/\s+/).length : 0;
   el('note-meta').textContent = `${words} palavra${words !== 1 ? 's' : ''} • ${v.length} caracteres`;
+}
+
+function renderPreview() {
+  const box = el('note-preview');
+  if (!box) return;
+  const html = mdToHtml(el('note-content').value);
+  box.innerHTML = html || '<p class="md-empty">Nada para visualizar ainda — comece a escrever em Markdown.</p>';
+}
+
+function setNotesMode(mode) {
+  prefs.notesMode = ['edit', 'split', 'preview'].includes(mode) ? mode : 'split';
+  el('editor-body').dataset.mode = prefs.notesMode;
+  $$('.mode-btn').forEach(b => b.classList.toggle('is-active', b.dataset.mode === prefs.notesMode));
+  save(K.prefs, prefs);
+}
+
+function downloadNoteAsMd() {
+  const n = notes.find(x => x.id === ui.activeNoteId);
+  if (!n) { toast('Abra uma nota antes de exportar', 'warn'); return; }
+  const title = n.title.trim() || 'nota';
+  const front = [`# ${title}`];
+  if (n.tags.length) front.push(`_${n.tags.join(' · ')}_`);
+  front.push(`_atualizado em ${fmtDateTime(n.updatedAt)} · StudyTrack_`, '');
+  const body = `${front.join('\n')}\n${n.content.trim()}\n`;
+  const slug = title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'nota';
+  const url = URL.createObjectURL(new Blob([body], { type: 'text/markdown;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${slug}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`"${slug}.md" baixado`, 'ok');
+  setStatus('Nota exportada como Markdown');
 }
 
 function createNote() {
@@ -852,6 +1021,8 @@ function seedData() {
   subjects = SUBJECTS_DEFAULT.slice();
   prefs.subjectColors = {};
   subjects.forEach((s, i) => { prefs.subjectColors[s] = SUBJECT_COLORS[i % SUBJECT_COLORS.length]; });
+  ui.activeNoteId = notes[0].id;
+  ui.filters.subject = '';
   persistAll();
   renderAll();
   renderSubjectManager();
@@ -945,6 +1116,7 @@ function bindEvents() {
         renderAll();
         toast('Cor de destaque restaurada', 'ok');
       }
+      if (a === 'note-download') downloadNoteAsMd();
       if (a === 'note-delete') {
         const n = notes.find(x => x.id === ui.activeNoteId);
         if (!n) return;
@@ -1106,9 +1278,16 @@ function bindEvents() {
   el('note-title').addEventListener('input', e => updateNote({ title: e.target.value }));
   el('note-tags').addEventListener('input', e =>
     updateNote({ tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }));
-  el('note-content').addEventListener('input', e => { updateNoteMeta(); updateNote({ content: e.target.value }); });
+  el('note-content').addEventListener('input', e => {
+    updateNoteMeta();
+    renderPreview();
+    updateNote({ content: e.target.value });
+  });
 
   $('.editor-toolbar').addEventListener('click', e => {
+    const modeBtn = e.target.closest('.mode-btn');
+    if (modeBtn) { setNotesMode(modeBtn.dataset.mode); return; }
+
     const tool = e.target.closest('.tool');
     if (!tool || !tool.dataset.wrap && !tool.dataset.prefix) return;
     const ta = el('note-content');
@@ -1120,14 +1299,17 @@ function bindEvents() {
       ins = w + sel + w;
       caret = start + ins.length;
     } else {
-      const pfx = tool.dataset.prefix + '\n';
-      ins = sel.split('\n').map(l => pfx + l).join('\n');
+      const pfx = tool.dataset.prefix;
+      ins = sel
+        ? sel.split('\n').map(l => pfx + l).join('\n')
+        : pfx;
       caret = start + ins.length;
     }
     ta.value = ta.value.slice(0, start) + ins + ta.value.slice(end);
     ta.focus();
     ta.setSelectionRange(caret, caret);
     updateNoteMeta();
+    renderPreview();
     updateNote({ content: ta.value });
   });
 

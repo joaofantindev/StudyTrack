@@ -206,14 +206,28 @@
               <button class="tool" data-prefix="- " title="Lista">&bull; Lista</button>
               <button class="tool" data-prefix="1. " title="Numerada">1.</button>
               <button class="tool" data-prefix="# " title="Título">H</button>
+              <button class="tool" data-prefix="- [ ] " title="Checklist">☑</button>
+              <button class="tool" data-prefix="&gt; " title="Citação">&rdquo;</button>
               <span class="sep"></span>
+              <div class="mode-switch" role="group" aria-label="Modo de visualização">
+                <button class="mode-btn" data-mode="edit">Editar</button>
+                <button class="mode-btn" data-mode="split">Dividir</button>
+                <button class="mode-btn" data-mode="preview">Ver</button>
+              </div>
+              <span class="sep"></span>
+              <button class="tool" data-action="note-download" title="Baixar como .md">
+                <svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l4-4m-4 4l-4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
               <button class="tool" data-action="note-delete" title="Excluir nota">
                 <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
             </div>
             <input type="text" id="note-title" class="note-title-input" placeholder="Título da nota">
             <input type="text" id="note-tags" class="note-tags-input" placeholder="Matéria, tags (separadas por vírgula)">
-            <textarea id="note-content" class="note-content" placeholder="Escreva seu resumo, snippet, links, comandos..."></textarea>
+            <div class="editor-body" id="editor-body" data-mode="split">
+              <textarea id="note-content" class="note-content" placeholder="Escreva em Markdown: # título, **negrito**, `código`, - listas, - [ ] checklists, ``` blocos de código..."></textarea>
+              <div class="editor-preview" id="note-preview" aria-live="polite"></div>
+            </div>
             <div class="editor-foot">
               <span class="muted" id="note-meta">0 palavras • 0 caracteres</span>
               <span class="muted">Salvo automaticamente</span>
