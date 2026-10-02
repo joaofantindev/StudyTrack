@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="pt-BR" data-theme="zabbix">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="description" content="StudyTrack is a Zabbix-inspired study task manager and note-taking app for programming students. Zero dependencies, offline-first, everything saved in localStorage.">
+<meta name="author" content="StudyTrack">
+<meta name="theme-color" content="#0c0c0e">
+<meta property="og:type" content="website">
+<meta property="og:title" content="StudyTrack">
+<meta property="og:description" content="Zabbix-inspired study task manager and notes for programming students.">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 128 128'%3E%3Crect width='128' height='128' rx='28' fill='%23e02b2b'/%3E%3Cpath d='M36 40h34M70 40 44 88h30' fill='none' stroke='%23fff' stroke-width='11' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>StudyTrack — Study Todo</title>
+<link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+
+<div class="app">
+
+  <aside class="sidebar" id="sidebar">
+    <div class="brand">
+      <div class="brand-mark">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 4h10.5L13 6.5H20L9.5 20H16" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </div>
+      <div class="brand-text">
+        <strong>StudyTrack</strong>
+        <span>study manager</span>
+      </div>
+    </div>
+
+    <nav class="nav" id="nav">
+      <span class="nav-label">Menu</span>
+      <button class="nav-item is-active" data-view="dashboard">
+        <svg viewBox="0 0 24 24"><path d="M3 13h8V3H3zM13 21h8V11h-8zM3 21h8v-6H3zM13 9h8V3h-8z"/></svg>
+        <span>Dashboard</span>
+      </button>
+      <button class="nav-item" data-view="tasks">
+        <svg viewBox="0 0 24 24"><path d="M3 6h13M3 12h13M3 18h9"/><path d="M18.5 15.5l2 2 4-4" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Tarefas</span>
+        <em class="nav-badge" id="nav-count-tasks">0</em>
+      </button>
+      <button class="nav-item" data-view="notes">
+        <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        <span>Notas</span>
+        <em class="nav-badge" id="nav-count-notes">0</em>
+      </button>
+      <button class="nav-item" data-view="themes">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18z"/></svg>
+        <span>Temas</span>
+      </button>
+
+      <span class="nav-label">Matérias</span>
+      <div class="subject-filter" id="sidebar-subjects"></div>
+    </nav>
+
+    <div class="sidebar-foot">
+      <div class="clock"><span id="clock-time">--:--:--</span><small id="clock-date">—</small></div>
+    </div>
+  </aside>
+
+  <div class="main">
+    <header class="topbar">
+      <button class="icon-btn only-mobile" id="btn-menu" aria-label="Menu">
+        <svg viewBox="0 0 24 24"><path d="M4 7h16M4 12h16M4 17h16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+      </button>
+      <div class="topbar-title">
+        <h1 id="view-title">Dashboard</h1>
+        <p id="view-sub">Visão geral do seu estudo</p>
+      </div>
+      <div class="topbar-actions">
+        <label class="search">
+          <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+          <input type="search" id="global-search" placeholder="Buscar tarefas e notas... (/)" autocomplete="off">
+        </label>
+        <label class="accent-pick" title="Cor de destaque">
+          <input type="color" id="accent-picker" value="#e02b2b">
+        </label>
+        <button class="btn btn-primary" data-action="new-task">
+          <svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>
+          <span>Nova tarefa</span>
+        </button>
+      </div>
+    </header>
+
+    <main class="content" id="content">
+
+      <section class="view" id="view-dashboard">
+        <div class="stat-grid" id="stat-grid"></div>
+
+        <div class="grid-2">
+          <section class="panel">
+            <header class="panel-head">
+              <h2>Progresso geral</h2>
+              <span class="chip" id="progress-chip">0%</span>
+            </header>
+            <div class="progress-body">
+              <div class="ring" id="progress-ring"><span id="progress-value">0%</span></div>
+              <ul class="progress-legend" id="progress-legend"></ul>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header class="panel-head">
+              <h2>Tarefas por matéria</h2>
+              <span class="muted">pendentes / total</span>
+            </header>
+            <div class="bars" id="subject-bars"></div>
+          </section>
+        </div>
+
+        <div class="grid-2">
+          <section class="panel">
+            <header class="panel-head">
+              <h2>Próximos prazos</h2>
+              <button class="link" data-view-link="tasks">ver todas</button>
+            </header>
+            <ul class="mini-list" id="upcoming-list"></ul>
+          </section>
+
+          <section class="panel">
+            <header class="panel-head">
+              <h2>Notas recentes</h2>
+              <button class="link" data-view-link="notes">ver todas</button>
+            </header>
+            <ul class="mini-list" id="recent-notes"></ul>
+          </section>
+        </div>
+      </section>
+
+      <section class="view is-hidden" id="view-tasks">
+        <section class="panel">
+          <header class="panel-head">
+            <h2 id="tasks-heading">Todas as tarefas</h2>
+            <div class="head-actions">
+              <label class="field inline">
+                <span>Ordenar</span>
+                <select id="task-sort" class="select">
+                  <option value="smart">Inteligente</option>
+                  <option value="due">Prazo</option>
+                  <option value="priority">Prioridade</option>
+                  <option value="created">Criadas</option>
+                  <option value="title">Título</option>
+                </select>
+              </label>
+            </div>
+          </header>
+
+          <div class="filter-row">
+            <label class="field inline">
+              <span>Matéria</span>
+              <select id="filter-subject" class="select"><option value="">Todas</option></select>
+            </label>
+            <label class="field inline">
+              <span>Prioridade</span>
+              <select id="filter-priority" class="select">
+                <option value="">Todas</option>
+                <option value="alta">Alta</option>
+                <option value="media">Média</option>
+                <option value="baixa">Baixa</option>
+              </select>
+            </label>
+            <label class="field inline">
+              <span>Status</span>
+              <select id="filter-status" class="select">
+                <option value="pending">Pendentes</option>
+                <option value="done">Concluídas</option>
+                <option value="all">Todas</option>
+              </select>
+            </label>
+            <button class="btn btn-ghost" data-action="clear-filters">Limpar filtros</button>
+            <label class="switch">
+              <input type="checkbox" id="filter-overdue">
+              <span>Só atrasadas</span>
+            </label>
+          </div>
+
+          <ul class="task-list" id="task-list"></ul>
+        </section>
+      </section>
+
+      <section class="view is-hidden" id="view-notes">
+        <div class="notes-layout">
+          <section class="panel notes-side">
+            <header class="panel-head">
+              <h2>Notas</h2>
+              <button class="btn btn-primary btn-sm" data-action="new-note">+ Nova</button>
+            </header>
+            <ul class="note-list" id="note-list"></ul>
+          </section>
+
+          <section class="panel notes-editor" id="note-editor">
+            <div class="editor-toolbar">
+              <button class="tool" data-wrap="**" title="Negrito"><b>B</b></button>
+              <button class="tool" data-wrap="*" title="Itálico"><i>I</i></button>
+              <button class="tool" data-wrap="`" title="Código">&lt;/&gt;</button>
+              <span class="sep"></span>
+              <button class="tool" data-prefix="- " title="Lista">&bull; Lista</button>
+              <button class="tool" data-prefix="1. " title="Numerada">1.</button>
+              <button class="tool" data-prefix="# " title="Título">H</button>
+              <span class="sep"></span>
+              <button class="tool" data-action="note-delete" title="Excluir nota">
+                <svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </button>
+            </div>
+            <input type="text" id="note-title" class="note-title-input" placeholder="Título da nota">
+            <input type="text" id="note-tags" class="note-tags-input" placeholder="Matéria, tags (separadas por vírgula)">
+            <textarea id="note-content" class="note-content" placeholder="Escreva seu resumo, snippet, links, comandos..."></textarea>
+            <div class="editor-foot">
+              <span class="muted" id="note-meta">0 palavras • 0 caracteres</span>
+              <span class="muted">Salvo automaticamente</span>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="view is-hidden" id="view-themes">
+        <section class="panel">
+          <header class="panel-head"><h2>Temas</h2><span class="muted">clique para aplicar</span></header>
+          <div class="theme-grid" id="theme-grid"></div>
+        </section>
+
+        <div class="grid-2">
+          <section class="panel">
+            <header class="panel-head"><h2>Aparência</h2></header>
+            <div class="settings-list">
+              <div class="setting">
+                <div><strong>Densidade da interface</strong><p class="muted">Espaçamento dos elementos</p></div>
+                <label class="switch"><input type="checkbox" id="opt-compact"><span>Compacto</span></label>
+              </div>
+              <div class="setting">
+                <div><strong>Animações</strong><p class="muted">Transições da interface</p></div>
+                <label class="switch"><input type="checkbox" id="opt-motion" checked><span>Ativar</span></label>
+              </div>
+              <div class="setting">
+                <div><strong>Cor de destaque</strong><p class="muted">Usada em botões, destaques e gráficos</p></div>
+                <label class="accent-pick big"><input type="color" id="accent-picker-2" value="#e02b2b"></label>
+                <button class="link" data-action="reset-accent">cor do tema</button>
+              </div>
+              <div class="setting">
+                <div><strong>Fonte</strong><p class="muted">Tipografia da interface</p></div>
+                <select id="opt-font" class="select">
+                  <option value="system">Sistema</option>
+                  <option value="mono">Monoespaçada</option>
+                  <option value="serif">Serifada</option>
+                </select>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <header class="panel-head"><h2>Dados</h2></header>
+            <div class="settings-list">
+              <div class="setting">
+                <div><strong>Exportar</strong><p class="muted">Baixe tarefas e notas em JSON</p></div>
+                <button class="btn btn-ghost btn-sm" data-action="export">Exportar</button>
+              </div>
+              <div class="setting">
+                <div><strong>Importar</strong><p class="muted">Substitui os dados atuais</p></div>
+                <button class="btn btn-ghost btn-sm" data-action="import">Importar</button>
+              </div>
+              <div class="setting">
+                <div><strong>Restaurar exemplo</strong><p class="muted">Dados de demonstração para estudos de programação</p></div>
+                <button class="btn btn-ghost btn-sm" data-action="seed">Carregar exemplo</button>
+              </div>
+              <div class="setting">
+                <div><strong>Limpar tudo</strong><p class="muted">Apaga tarefas, notas e preferências</p></div>
+                <button class="btn btn-danger btn-sm" data-action="reset">Apagar tudo</button>
+              </div>
+            </div>
+            <input type="file" id="import-file" accept="application/json" hidden>
+          </section>
+        </div>
+      </section>
+
+    </main>
+
+    <footer class="statusbar">
+      <span id="status-left">Pronto</span>
+      <span class="sep"></span>
+      <span>Atalhos: <kbd>/</kbd> buscar · <kbd>n</kbd> nova tarefa · <kbd>Esc</kbd> fechar</span>
+    </footer>
+  </div>
+</div>
+
+<div class="backdrop" id="backdrop"></div>
+
+<div class="modal" id="task-modal" role="dialog" aria-modal="true" aria-labelledby="task-modal-title">
+  <header class="modal-head">
+    <h2 id="task-modal-title">Nova tarefa</h2>
+    <button class="icon-btn" data-close aria-label="Fechar">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+  <form id="task-form" class="modal-body">
+    <label class="field">
+      <span>Tarefa</span>
+      <input type="text" id="f-title" placeholder="Ex: Praticar async/await" required maxlength="120" autocomplete="off">
+    </label>
+    <div class="field-2">
+      <label class="field">
+        <span>Matéria</span>
+        <input type="text" id="f-subject" list="subject-list" placeholder="JavaScript" maxlength="40" autocomplete="off">
+        <datalist id="subject-list"></datalist>
+      </label>
+      <label class="field">
+        <span>Prioridade</span>
+        <select id="f-priority" class="select">
+          <option value="alta">Alta</option>
+          <option value="media" selected>Média</option>
+          <option value="baixa">Baixa</option>
+        </select>
+      </label>
+    </div>
+    <div class="field-2">
+      <label class="field">
+        <span>Prazo</span>
+        <input type="date" id="f-due" class="select">
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select id="f-done" class="select">
+          <option value="0">Pendente</option>
+          <option value="1">Concluída</option>
+        </select>
+      </label>
+    </div>
+    <label class="field">
+      <span>Anotação</span>
+      <textarea id="f-notes" rows="3" placeholder="Link, comando, lembrete..." maxlength="400"></textarea>
+    </label>
+    <footer class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close>Cancelar</button>
+      <button type="submit" class="btn btn-primary">Salvar tarefa</button>
+    </footer>
+  </form>
+</div>
+
+<div class="modal" id="confirm-modal" role="dialog" aria-modal="true">
+  <div class="modal-body">
+    <h2 id="confirm-title">Confirmar</h2>
+    <p id="confirm-text" class="muted"></p>
+    <footer class="modal-foot">
+      <button class="btn btn-ghost" data-close>Cancelar</button>
+      <button class="btn btn-danger" id="confirm-ok">Confirmar</button>
+    </footer>
+  </div>
+</div>
+
+<div class="toasts" id="toasts"></div>
+
+<script src="js/app.js"></script>
+</body>
+</html>
