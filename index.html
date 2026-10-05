@@ -39,10 +39,20 @@
         <span>Tarefas</span>
         <em class="nav-badge" id="nav-count-tasks">0</em>
       </button>
+      <button class="nav-item" data-view="jobs">
+        <svg viewBox="0 0 24 24"><path d="M3 9h18v10a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1z"/><path d="M9 9V6a2 2 0 0 1 2-2h2a2 2 0 0 1 2 2v3" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round"/></svg>
+        <span>Trabalhos</span>
+        <em class="nav-badge" id="nav-count-jobs">0</em>
+      </button>
       <button class="nav-item" data-view="notes">
         <svg viewBox="0 0 24 24"><path d="M6 3h8l4 4v14H6z"/><path d="M14 3v4h4M9 12h6M9 16h6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
         <span>Notas</span>
         <em class="nav-badge" id="nav-count-notes">0</em>
+      </button>
+      <button class="nav-item" data-view="history">
+        <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7.5V12l3.5 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+        <span>Histórico</span>
+        <em class="nav-badge" id="nav-count-history">0</em>
       </button>
       <button class="nav-item" data-view="themes">
         <svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3a9 9 0 000 18z"/></svg>
@@ -187,6 +197,127 @@
         </section>
       </section>
 
+      <section class="view is-hidden" id="view-jobs">
+        <div class="jobs-layout">
+          <section class="panel jobs-side">
+            <header class="panel-head">
+              <h2>Trabalhos</h2>
+              <button class="btn btn-primary btn-sm" data-action="new-job">+ Novo</button>
+            </header>
+            <label class="search sm-search">
+              <svg viewBox="0 0 24 24"><circle cx="11" cy="11" r="6.5" fill="none" stroke="currentColor" stroke-width="2"/><path d="M16 16l4.5 4.5" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>
+              <input type="search" id="job-search" placeholder="Buscar trabalho..." autocomplete="off">
+            </label>
+            <ul class="job-list" id="job-list"></ul>
+          </section>
+
+          <section class="panel jobs-detail" id="job-detail">
+            <div class="empty" id="job-empty">Nenhum trabalho aberto. Crie o primeiro para organizar checklist, notas e destaques.</div>
+
+            <div id="job-body" class="is-hidden">
+              <header class="job-head">
+                <div class="job-head-info">
+                  <h2 id="job-detail-title">—</h2>
+                  <div class="job-meta" id="job-detail-meta"></div>
+                </div>
+                <div class="head-actions">
+                  <button class="btn btn-ghost btn-sm" data-action="edit-job">Editar</button>
+                  <button class="btn btn-danger btn-sm" data-action="delete-job">Excluir</button>
+                </div>
+              </header>
+
+              <section class="job-block">
+                <h3>Destaques</h3>
+                <form class="link-add" id="link-form">
+                  <label class="field"><span>Nome</span><input type="text" id="link-label" placeholder="Site da empresa" maxlength="60" autocomplete="off"></label>
+                  <label class="field"><span>URL</span><input type="text" id="link-url" placeholder="empresa.com.br" maxlength="300" autocomplete="off"></label>
+                  <button type="submit" class="btn btn-primary">Adicionar</button>
+                </form>
+                <ul class="link-list" id="link-list"></ul>
+              </section>
+
+              <section class="job-block">
+                <header class="job-block-head">
+                  <h3>Checklist</h3>
+                  <div class="job-progress">
+                    <span class="job-progress-track"><span class="job-progress-done" id="job-progress-bar" style="width:0%"></span></span>
+                    <span id="job-progress-label">0/0</span>
+                  </div>
+                </header>
+                <form class="item-add" id="item-form">
+                  <label class="field"><span>Tarefa</span><input type="text" id="item-title" placeholder="Ex: modelar sistema" maxlength="120" autocomplete="off"></label>
+                  <label class="field"><span>Prioridade</span>
+                    <select id="item-priority" class="select">
+                      <option value="alta">Alta</option>
+                      <option value="media" selected>Média</option>
+                      <option value="baixa">Baixa</option>
+                    </select>
+                  </label>
+                  <label class="field"><span>Prazo</span><input type="date" id="item-due" class="select"></label>
+                  <button type="submit" class="btn btn-primary">Adicionar</button>
+                </form>
+                <div class="filter-row">
+                  <label class="field inline">
+                    <span>Prioridade</span>
+                    <select id="item-filter-priority" class="select">
+                      <option value="">Todas</option>
+                      <option value="alta">Alta</option>
+                      <option value="media">Média</option>
+                      <option value="baixa">Baixa</option>
+                    </select>
+                  </label>
+                  <label class="field inline">
+                    <span>Status</span>
+                    <select id="item-filter-status" class="select">
+                      <option value="pending">Pendentes</option>
+                      <option value="done">Concluídas</option>
+                      <option value="all">Todas</option>
+                    </select>
+                  </label>
+                  <span class="muted" id="items-heading">0 itens</span>
+                </div>
+                <ul class="task-list" id="item-list"></ul>
+              </section>
+
+              <section class="job-block">
+                <h3>Notas do trabalho</h3>
+                <div class="notes-editor" id="job-note-editor">
+                  <div class="editor-toolbar" data-target="job-note-content" data-kind="job">
+                    <button class="tool" data-wrap="**" title="Negrito"><b>B</b></button>
+                    <button class="tool" data-wrap="*" title="Itálico"><i>I</i></button>
+                    <button class="tool" data-wrap="`" title="Código">&lt;/&gt;</button>
+                    <span class="sep"></span>
+                    <button class="tool" data-prefix="- " title="Lista">&bull; Lista</button>
+                    <button class="tool" data-prefix="1. " title="Numerada">1.</button>
+                    <button class="tool" data-prefix="# " title="Título">H</button>
+                    <button class="tool" data-prefix="- [ ] " title="Checklist">☑</button>
+                    <button class="tool" data-prefix="&gt; " title="Citação">&rdquo;</button>
+                    <span class="sep"></span>
+                    <div class="mode-switch" role="group" aria-label="Modo de visualização">
+                      <button class="mode-btn" data-mode="edit">Editar</button>
+                      <button class="mode-btn" data-mode="split">Dividir</button>
+                      <button class="mode-btn" data-mode="preview">Ver</button>
+                    </div>
+                    <span class="sep"></span>
+                    <button class="tool" data-action="job-note-download" title="Baixar como .md">
+                      <svg viewBox="0 0 24 24"><path d="M12 4v11m0 0l4-4m-4 4l-4-4M4 19h16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                    </button>
+                  </div>
+                  <div class="editor-body" id="job-editor-body" data-mode="split">
+                    <textarea id="job-note-content" class="note-content" placeholder="Notas do trabalho em Markdown: decisões, contratos de API, comandos..."></textarea>
+                    <div class="editor-preview" id="job-note-preview" aria-live="polite"></div>
+                  </div>
+                  <div class="editor-foot">
+                    <span class="muted" id="job-note-meta">0 palavras • 0 caracteres</span>
+                    <span class="muted">Salvo automaticamente</span>
+                  </div>
+                </div>
+              </section>
+            </div>
+          </section>
+        </div>
+      </section>
+
       <section class="view is-hidden" id="view-notes">
         <div class="notes-layout">
           <section class="panel notes-side">
@@ -198,7 +329,7 @@
           </section>
 
           <section class="panel notes-editor" id="note-editor">
-            <div class="editor-toolbar">
+            <div class="editor-toolbar" data-target="note-content" data-kind="note">
               <button class="tool" data-wrap="**" title="Negrito"><b>B</b></button>
               <button class="tool" data-wrap="*" title="Itálico"><i>I</i></button>
               <button class="tool" data-wrap="`" title="Código">&lt;/&gt;</button>
@@ -234,6 +365,19 @@
             </div>
           </section>
         </div>
+      </section>
+
+      <section class="view is-hidden" id="view-history">
+        <section class="panel">
+          <header class="panel-head">
+            <h2>Histórico</h2>
+            <span class="muted" id="history-sub">guardado por 7 dias no navegador</span>
+            <div class="head-actions">
+              <button class="btn btn-ghost btn-sm" data-action="clear-history">Limpar histórico</button>
+            </div>
+          </header>
+          <ul class="task-list" id="history-list"></ul>
+        </section>
       </section>
 
       <section class="view is-hidden" id="view-themes">
@@ -293,6 +437,38 @@
             <input type="file" id="import-file" accept="application/json" hidden>
           </section>
         </div>
+
+        <section class="panel">
+          <header class="panel-head">
+            <h2>Plano de fundo</h2>
+            <span class="muted">uma imagem por vez — a próxima substitui a atual</span>
+          </header>
+          <div class="settings-list">
+            <div class="setting">
+              <div><strong>Enviar wallpaper</strong><p class="muted">PNG, JPG, WebP ou GIF — reduzido para caber no navegador</p></div>
+              <input type="file" id="wall-file" accept="image/*" hidden>
+              <button class="btn btn-ghost btn-sm" data-action="wall-pick">Enviar imagem</button>
+            </div>
+          </div>
+          <div class="wall-preview is-hidden" id="wall-preview"></div>
+          <div class="settings-list">
+            <div class="setting">
+              <div><strong>Escurecer imagem</strong><p class="muted">Véu sobre o wallpaper para o texto ficar legível</p></div>
+              <input type="range" id="wall-veil" min="0" max="70" step="5" value="35">
+              <span class="muted range-val" id="wall-veil-val">35%</span>
+            </div>
+            <div class="setting">
+              <div><strong>Opacidade dos painéis</strong><p class="muted">Transparência sobre o plano de fundo</p></div>
+              <input type="range" id="wall-alpha" min="60" max="100" step="5" value="90">
+              <span class="muted range-val" id="wall-alpha-val">90%</span>
+            </div>
+            <div class="setting">
+              <div><strong>Desfoque</strong><p class="muted">Desfoque atrás dos painéis e modais</p></div>
+              <input type="range" id="wall-blur" min="0" max="12" step="1" value="3">
+              <span class="muted range-val" id="wall-blur-val">3px</span>
+            </div>
+          </div>
+        </section>
       </section>
 
     </main>
@@ -385,6 +561,91 @@
       <button class="btn btn-ghost" data-close>Fechar</button>
     </footer>
   </div>
+</div>
+
+<div class="modal" id="job-modal" role="dialog" aria-modal="true" aria-labelledby="job-modal-title">
+  <header class="modal-head">
+    <h2 id="job-modal-title">Novo trabalho</h2>
+    <button class="icon-btn" data-close aria-label="Fechar">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+  <form id="job-form" class="modal-body">
+    <label class="field">
+      <span>Trabalho</span>
+      <input type="text" id="j-title" placeholder="Ex: modelar sistema de estoque" required maxlength="120" autocomplete="off">
+    </label>
+    <div class="field-2">
+      <label class="field">
+        <span>Empresa / cliente</span>
+        <input type="text" id="j-company" placeholder="Acme Ltda" maxlength="60" autocomplete="off">
+      </label>
+      <label class="field">
+        <span>Status</span>
+        <select id="j-status" class="select">
+          <option value="ativo" selected>Ativo</option>
+          <option value="pausado">Pausado</option>
+          <option value="concluido">Concluído</option>
+        </select>
+      </label>
+    </div>
+    <label class="field">
+      <span>Prazo</span>
+      <input type="date" id="j-due" class="select">
+    </label>
+    <label class="field">
+      <span>Descrição</span>
+      <textarea id="j-desc" rows="3" placeholder="Escopo, contexto, quem pediu..." maxlength="600"></textarea>
+    </label>
+    <footer class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close>Cancelar</button>
+      <button type="submit" class="btn btn-primary">Salvar trabalho</button>
+    </footer>
+  </form>
+</div>
+
+<div class="modal" id="work-item-modal" role="dialog" aria-modal="true" aria-labelledby="work-item-modal-title">
+  <header class="modal-head">
+    <h2 id="work-item-modal-title">Nova tarefa de trabalho</h2>
+    <button class="icon-btn" data-close aria-label="Fechar">
+      <svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>
+    </button>
+  </header>
+  <form id="work-item-form" class="modal-body">
+    <label class="field">
+      <span>Tarefa</span>
+      <input type="text" id="wi-title" placeholder="Ex: modelar sistema" required maxlength="120" autocomplete="off">
+    </label>
+    <div class="field-2">
+      <label class="field">
+        <span>Prioridade</span>
+        <select id="wi-priority" class="select">
+          <option value="alta">Alta</option>
+          <option value="media" selected>Média</option>
+          <option value="baixa">Baixa</option>
+        </select>
+      </label>
+      <label class="field">
+        <span>Prazo</span>
+        <input type="date" id="wi-due" class="select">
+      </label>
+    </div>
+    <label class="field">
+      <span>Status</span>
+      <select id="wi-done" class="select">
+        <option value="0">Pendente</option>
+        <option value="1">Concluída</option>
+      </select>
+    </label>
+    <label class="field">
+      <span>Anotação</span>
+      <textarea id="wi-notes" rows="3" placeholder="Link, comando, lembrete..." maxlength="400"></textarea>
+    </label>
+    <footer class="modal-foot">
+      <button type="button" class="btn btn-ghost" data-close>Cancelar</button>
+      <button type="submit" class="btn btn-primary">Salvar tarefa</button>
+    </footer>
+  </form>
 </div>
 
 <div class="modal" id="confirm-modal" role="dialog" aria-modal="true">

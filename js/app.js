@@ -3,7 +3,10 @@ const K = {
   tasks: 'studytrack.tasks',
   notes: 'studytrack.notes',
   prefs: 'studytrack.prefs',
-  subjects: 'studytrack.subjects'
+  subjects: 'studytrack.subjects',
+  jobs: 'studytrack.jobs',
+  history: 'studytrack.history',
+  wallpaper: 'studytrack.wallpaper'
 };
 
 const load = (k, fallback) => {
@@ -53,6 +56,17 @@ const SUBJECTS_DEFAULT = [
   'JavaScript','HTML & CSS','Python','Java','Banco de Dados','DevOps','Algoritmos','English','Git','Outros'
 ];
 
+const JOB_STATUS = {
+  ativo: { label: 'Ativo', color: 'var(--accent)' },
+  pausado: { label: 'Pausado', color: 'var(--warn)' },
+  concluido: { label: 'Concluído', color: 'var(--ok)' }
+};
+
+const DAY = 86400000;
+const HISTORY_DAYS = 7;
+const HISTORY_MAX = 400;
+const WALL_MAX_SIZE = 1920;
+
 /* ================= state ================= */
 const defaultPrefs = {
   theme: 'zabbix',
@@ -68,6 +82,9 @@ const defaultPrefs = {
 let tasks = load(K.tasks, []);
 let notes = load(K.notes, []);
 let prefs = Object.assign({}, defaultPrefs, load(K.prefs, {}));
+let jobs = load(K.jobs, []);
+let history = load(K.history, []);
+let wallpaper = load(K.wallpaper, null);
 
 const slug = name => String(name || '').trim().toLowerCase();
 
@@ -89,6 +106,27 @@ let subjects = (() => {
 
 const findSubject = name => subjects.find(s => s.toLowerCase() === slug(name));
 
+jobs = (Array.isArray(jobs) ? jobs : []).map(j => ({
+  id: j.id || uid(),
+  title: j.title || 'Trabalho',
+  company: j.company || '',
+  status: JOB_STATUS[j.status] ? j.status : 'ativo',
+  due: j.due || '',
+  desc: j.desc || '',
+  items: (Array.isArray(j.items) ? j.items : []).map(normalizeItem).filter(Boolean),
+  links: (Array.isArray(j.links) ? j.links : []).map(l => ({
+    id: l.id || uid(),
+    label: l.label || l.url || 'link',
+    url: l.url || ''
+  })).filter(l => l.url),
+  note: { content: (j.note && j.note.content) || '', updatedAt: (j.note && j.note.updatedAt) || Date.now() },
+  createdAt: j.createdAt || Date.now(),
+  updatedAt: j.updatedAt || Date.now()
+}));
+
+tasks.forEach(t => { if (!Array.isArray(t.subtasks)) t.subtasks = []; });
+history = (Array.isArray(history) ? history : []).filter(h => h && h.id && h.title);
+
 let ui = {
   view: 'dashboard',
   search: '',
@@ -97,6 +135,14 @@ let ui = {
   activeNoteId: notes[0]?.id || null,
   editingSubject: null,
   subjectSearch: '',
+  activeJobId: jobs[0]?.id || null,
+  jobSearch: '',
+  jobNoteLoadedFor: null,
+  jobFilters: { priority: '', status: 'pending' },
+  editingJobId: null,
+  editingItemId: null,
+  editingItemJobId: null,
+  openGroups: new Set(),
   confirmAction: null
 };
 
@@ -105,10 +151,14 @@ const persistAll = () => {
   save(K.notes, notes);
   save(K.prefs, prefs);
   save(K.subjects, subjects);
+  save(K.jobs, jobs);
+  save(K.history, history);
 };
 const persistTasks = () => save(K.tasks, tasks);
 const persistNotes = () => save(K.notes, notes);
 const persistSubjects = () => save(K.subjects, subjects);
+const persistJobs = () => save(K.jobs, jobs);
+const persistHistory = () => save(K.history, history);
 
 /* ================= dom ================= */
 const $ = sel => document.querySelector(sel);
@@ -250,6 +300,140 @@ function renderThemeGrid() {
         <small>${t.desc}</small>
       </div>
     </button>`).join('');
+}
+
+/* ================= wallpaper ================= */
+const kb = bytes => bytes > 1048576
+  ? `${(bytes / 1048576).toFixed(1)} MB`
+  : `${Math.max(1, Math.round(bytes / 1024))} KB`;
+
+function applyWallpaperVars() {
+  const root = document.documentElement;
+  const on = !!(wallpaper && wallpaper.url);
+  root.dataset.wall = on ? 'on' : 'off';
+  if (on) {
+    root.style.setProperty('--wallpaper', `url("${wallpaper.url}")`);
+    root.style.setProperty('--wall-veil', String(wallpaper.veil ?? 0.35));
+    root.style.setProperty('--wall-alpha', `${wallpaper.alpha ?? 90}%`);
+    root.style.setProperty('--wall-blur', `${wallpaper.blur ?? 3}px`);
+  } else {
+    ['--wallpaper', '--wall-veil', '--wall-alpha', '--wall-blur'].forEach(p => root.style.removeProperty(p));
+  }
+}
+
+function renderWallpaperUI() {
+  const box = el('wall-preview');
+  const on = !!(wallpaper && wallpaper.url);
+  if (box) {
+    box.classList.toggle('is-hidden', !on);
+    if (on) {
+      box.innerHTML = `
+        <img src="${wallpaper.url}" alt="Plano de fundo atual">
+        <div class="wall-info">
+          <strong>${escapeHtml(wallpaper.name || 'wallpaper')}</strong>
+          <small>${wallpaper.w}&times;${wallpaper.h} · ${kb(wallpaper.size || 0)} · enviado ${fmtDateTime(wallpaper.setAt || Date.now())}</small>
+        </div>
+        <button class="btn btn-ghost btn-sm" data-action="wall-remove">Remover</button>`;
+    } else {
+      box.innerHTML = '';
+    }
+  }
+  const range = id => { const n = el(id); if (n) n.disabled = !on; return n; };
+  const veil = range('wall-veil');
+  const alpha = range('wall-alpha');
+  const blur = range('wall-blur');
+  if (veil) veil.value = Math.round((wallpaper?.veil ?? 0.35) * 100);
+  if (alpha) alpha.value = wallpaper?.alpha ?? 90;
+  if (blur) blur.value = wallpaper?.blur ?? 3;
+  el('wall-veil-val').textContent = `${Math.round((wallpaper?.veil ?? 0.35) * 100)}%`;
+  el('wall-alpha-val').textContent = `${wallpaper?.alpha ?? 90}%`;
+  el('wall-blur-val').textContent = `${wallpaper?.blur ?? 3}px`;
+}
+
+function applyWallpaper() {
+  applyWallpaperVars();
+  renderWallpaperUI();
+}
+
+function storeWallpaper(next) {
+  const prev = wallpaper;
+  wallpaper = next;
+  try {
+    localStorage.setItem(K.wallpaper, JSON.stringify(wallpaper));
+  } catch {
+    wallpaper = prev;
+    applyWallpaper();
+    toast('Imagem grande demais para o navegador — envie uma menor', 'warn');
+    return false;
+  }
+  applyWallpaper();
+  return true;
+}
+
+function downscaleImage(dataUrl) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const scale = Math.min(1, WALL_MAX_SIZE / Math.max(img.width, img.height));
+      const w = Math.max(1, Math.round(img.width * scale));
+      const h = Math.max(1, Math.round(img.height * scale));
+      if (scale === 1) {
+        resolve({ url: dataUrl, w, h });
+        return;
+      }
+      const canvas = document.createElement('canvas');
+      canvas.width = w;
+      canvas.height = h;
+      try {
+        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+        resolve({ url: canvas.toDataURL('image/jpeg', 0.82), w, h });
+      } catch {
+        resolve({ url: dataUrl, w, h });
+      }
+    };
+    img.onerror = () => reject(new Error('imagem inválida'));
+    img.src = dataUrl;
+  });
+}
+
+function uploadWallpaper(file) {
+  if (!file) return;
+  if (!/^image\//.test(file.type)) {
+    toast('Envie um arquivo de imagem', 'warn');
+    return;
+  }
+  const reader = new FileReader();
+  reader.onload = e => {
+    downscaleImage(e.target.result)
+      .then(img => {
+        const prev = wallpaper || {};
+        const ok = storeWallpaper({
+          url: img.url,
+          name: file.name,
+          w: img.w,
+          h: img.h,
+          size: Math.round(img.url.length * 0.75),
+          veil: prev.veil ?? 0.35,
+          alpha: prev.alpha ?? 90,
+          blur: prev.blur ?? 3,
+          setAt: Date.now()
+        });
+        if (!ok) return;
+        toast('Plano de fundo aplicado', 'ok');
+        setStatus(`Wallpaper "${file.name}" aplicado`);
+      })
+      .catch(() => toast('Não consegui ler essa imagem', 'warn'));
+  };
+  reader.onerror = () => toast('Falha ao ler o arquivo', 'warn');
+  reader.readAsDataURL(file);
+}
+
+function removeWallpaper() {
+  wallpaper = null;
+  try { localStorage.removeItem(K.wallpaper); } catch {}
+  applyWallpaper();
+  toast('Plano de fundo removido', 'warn');
+  setStatus('Plano de fundo removido');
 }
 
 /* ================= subjects ================= */
@@ -453,6 +637,11 @@ function filteredTasks() {
 const CHECK_SVG = '<svg viewBox="0 0 24 24"><path d="M4 12l5 5L20 6" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const EDIT_SVG = '<svg viewBox="0 0 24 24"><path d="M4 20h4l10-10-4-4L4 16zM13.5 5.5l4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 const DEL_SVG = '<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V5h6v2M7 7l1 13h8l1-13" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const CLOSE_SVG = '<svg viewBox="0 0 24 24"><path d="M6 6l12 12M18 6L6 18" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/></svg>';
+const PLUS_SVG = '<svg viewBox="0 0 24 24"><path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round"/></svg>';
+const COPY_SVG = '<svg viewBox="0 0 24 24"><path d="M9 9h10v10H9z"/><path d="M15 9V5H5v10h4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linejoin="round"/></svg>';
+const UNDO_SVG = '<svg viewBox="0 0 24 24"><path d="M4 10h9a5 5 0 0 1 0 10h-3" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M8 6l-4 4 4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>';
+const HOURS_SVG = '<svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="9" fill="none" stroke="currentColor" stroke-width="2"/><path d="M12 7.5V12l3.5 2" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
 
 function dueTag(t) {
   if (!t.due) return '';
@@ -478,21 +667,24 @@ function renderTaskList() {
   }
 
   box.innerHTML = list.map(t => `
-    <li class="task ${t.done ? 'is-done' : ''} ${isLate(t) ? 'is-late' : ''}" style="--p:${PRIOS[t.priority].color}" data-id="${t.id}">
-      <button class="check" data-act="toggle" aria-label="Alternar conclusão">${CHECK_SVG}</button>
-      <div class="task-info">
-        <span class="t-title">${escapeHtml(t.title)}</span>
-        <div class="t-meta">
-          ${t.subject ? `<span class="tag" style="color:${subjectColor(t.subject)};border-color:${subjectColor(t.subject)}55">${escapeHtml(t.subject)}</span>` : ''}
-          <span class="tag prio-${t.priority}">${PRIOS[t.priority].label}</span>
-          ${dueTag(t)}
-          ${t.notes ? `<span class="t-note">— ${escapeHtml(t.notes)}</span>` : ''}
+    <li class="tgroup" data-scope="task" data-id="${t.id}">
+      <div class="task ${t.done ? 'is-done' : ''} ${isLate(t) ? 'is-late' : ''}" style="--p:${PRIOS[t.priority].color}">
+        <button class="check" data-act="toggle" aria-label="Alternar conclusão">${CHECK_SVG}</button>
+        <div class="task-info">
+          <span class="t-title">${escapeHtml(t.title)}${subCountBadge(t)}</span>
+          <div class="t-meta">
+            ${t.subject ? `<span class="tag" style="color:${subjectColor(t.subject)};border-color:${subjectColor(t.subject)}55">${escapeHtml(t.subject)}</span>` : ''}
+            <span class="tag prio-${t.priority}">${PRIOS[t.priority].label}</span>
+            ${dueTag(t)}
+            ${t.notes ? `<span class="t-note">— ${escapeHtml(t.notes)}</span>` : ''}
+          </div>
+        </div>
+        <div class="task-actions">
+          <button data-act="edit" title="Editar">${EDIT_SVG}</button>
+          <button data-act="del" class="del" title="Excluir">${DEL_SVG}</button>
         </div>
       </div>
-      <div class="task-actions">
-        <button data-act="edit" title="Editar">${EDIT_SVG}</button>
-        <button data-act="del" class="del" title="Excluir">${DEL_SVG}</button>
-      </div>
+      ${subPanel(t, 'task', '')}
     </li>`).join('');
 }
 
@@ -518,6 +710,648 @@ function renderSidebarSubjects() {
   el('subject-list').innerHTML = list.map(s => `<option value="${escapeHtml(s)}"></option>`).join('');
 }
 
+/* ---------- subtarefas ---------- */
+const subtasks = node => {
+  if (!Array.isArray(node.subtasks)) node.subtasks = [];
+  return node.subtasks;
+};
+
+const subProgress = node => {
+  const list = subtasks(node);
+  const done = list.filter(s => s.done).length;
+  return { done, total: list.length, pct: list.length ? Math.round((done / list.length) * 100) : 0 };
+};
+
+const groupKey = (scope, jobId, id) => `${scope}:${jobId || ''}:${id}`;
+
+function findNode(scope, jobId, id) {
+  if (scope === 'item') {
+    const job = jobs.find(j => j.id === jobId);
+    const node = job && job.items.find(i => i.id === id);
+    return node ? { node, job } : null;
+  }
+  const node = tasks.find(t => t.id === id);
+  return node ? { node, job: null } : null;
+}
+
+const persistNode = found => found.job ? persistJobs() : persistTasks();
+
+const subCountBadge = node => {
+  const p = subProgress(node);
+  if (!p.total) return '';
+  return `<span class="sub-count ${p.done === p.total ? 'is-full' : ''}">${p.done}/${p.total} subtarefas</span>`;
+};
+
+function subPanel(node, scope, jobId) {
+  const key = groupKey(scope, jobId, node.id);
+  if (!ui.openGroups.has(key)) return '';
+  const list = subtasks(node);
+  const rows = list.length
+    ? list.map(s => `
+      <li class="sub-row ${s.done ? 'is-done' : ''}" data-sub-id="${s.id}">
+        <button class="sub-check" data-act="sub-toggle" aria-label="Alternar subtarefa">${CHECK_SVG}</button>
+        <span class="sub-title">${escapeHtml(s.title)}</span>
+        <button class="sub-del" data-act="sub-del" title="Excluir subtarefa">${CLOSE_SVG}</button>
+      </li>`).join('')
+    : '<li class="sub-empty muted">Nenhuma subtarefa ainda.</li>';
+
+  return `
+    <div class="subs" style="--p:${PRIOS[node.priority] ? PRIOS[node.priority].color : 'var(--accent)'}">
+      <ul class="subs-list">${rows}</ul>
+      <form class="subs-form" data-scope="${scope}" data-job="${jobId || ''}" data-id="${node.id}">
+        <input type="text" class="subs-input" placeholder="Nova subtarefa — Enter para adicionar" maxlength="120" autocomplete="off">
+        <button type="submit" class="subs-add" title="Adicionar subtarefa">${PLUS_SVG}</button>
+      </form>
+    </div>`;
+}
+
+const toggleGroup = (scope, jobId, id) => {
+  const key = groupKey(scope, jobId, id);
+  if (ui.openGroups.has(key)) ui.openGroups.delete(key);
+  else ui.openGroups.add(key);
+  scope === 'item' ? renderJobItems() : renderTaskList();
+};
+
+function addSubtask(found, title) {
+  const clean = String(title || '').trim();
+  if (!clean || !found) return false;
+  subtasks(found.node).push({
+    id: uid(), title: clean, done: false, createdAt: Date.now(), completedAt: null
+  });
+  found.node.completedAt = found.node.done ? (found.node.completedAt || Date.now()) : null;
+  if (found.job) found.job.updatedAt = Date.now();
+  persistNode(found);
+  renderAll();
+  return true;
+}
+
+function toggleSubtask(found, subId) {
+  const sub = found && subtasks(found.node).find(s => s.id === subId);
+  if (!sub) return;
+  sub.done = !sub.done;
+  sub.completedAt = sub.done ? Date.now() : null;
+  persistNode(found);
+  renderAll();
+}
+
+function deleteSubtask(found, subId) {
+  if (!found) return;
+  found.node.subtasks = subtasks(found.node).filter(s => s.id !== subId);
+  persistNode(found);
+  renderAll();
+}
+
+/* ================= history ================= */
+const purgeHistory = () => {
+  const now = Date.now();
+  const before = history.length;
+  history = history.filter(h => !h.expiresAt || h.expiresAt > now);
+  if (history.length > HISTORY_MAX) history = history.slice(0, HISTORY_MAX);
+  if (history.length !== before) persistHistory();
+};
+
+function recordCompletion(node, kind, jobId = null) {
+  purgeHistory();
+  const at = node.completedAt || Date.now();
+  const key = `${kind}:${node.id}`;
+  history = history.filter(h => h.key !== key);
+  history.unshift({
+    id: uid(),
+    key,
+    kind,
+    jobId,
+    originId: node.id,
+    title: node.title,
+    subject: node.subject || '',
+    priority: node.priority || 'media',
+    due: node.due || '',
+    notes: node.notes || '',
+    subtasks: subtasks(node).map(s => Object.assign({}, s)),
+    completedAt: at,
+    expiresAt: at + HISTORY_DAYS * DAY
+  });
+  persistHistory();
+}
+
+const unrecordCompletion = (kind, originId) => {
+  const before = history.length;
+  history = history.filter(h => h.key !== `${kind}:${originId}`);
+  if (history.length !== before) persistHistory();
+};
+
+const jobTitleOf = entry => {
+  if (entry.kind !== 'item') return '';
+  const job = jobs.find(j => j.id === entry.jobId);
+  return job ? job.title : 'trabalho removido';
+};
+
+const relTime = ts => {
+  const mins = Math.round((Date.now() - ts) / 60000);
+  if (mins < 1) return 'agora';
+  if (mins < 60) return `há ${mins}min`;
+  const hours = Math.round(mins / 60);
+  if (hours < 24) return `há ${hours}h`;
+  const days = Math.round(hours / 24);
+  if (days === 1) return 'ontem';
+  if (days < 30) return `há ${days} dias`;
+  return fmtDateTime(ts);
+};
+
+function renderHistory() {
+  purgeHistory();
+  const q = ui.search.trim().toLowerCase();
+  const list = history
+    .filter(h => !q || `${h.title} ${h.subject || ''} ${jobTitleOf(h)}`.toLowerCase().includes(q))
+    .sort((a, b) => b.completedAt - a.completedAt);
+
+  el('nav-count-history').textContent = history.length;
+  el('history-sub').textContent = history.length
+    ? `${history.length} item${history.length !== 1 ? 'ns' : ''} · some em ${HISTORY_DAYS} dias`
+    : `guardado por ${HISTORY_DAYS} dias no navegador`;
+
+  const box = el('history-list');
+  if (!list.length) {
+    box.innerHTML = `<li class="empty">${ui.search ? 'Nenhum resultado para "' + escapeHtml(ui.search) + '"' : 'Nada no histórico ainda. Conclua uma tarefa ou um item de trabalho para começar.'}</li>`;
+    return;
+  }
+
+  box.innerHTML = list.map(h => {
+    const left = Math.max(0, Math.ceil((h.expiresAt - Date.now()) / DAY));
+    const src = h.kind === 'item'
+      ? `Trabalho: ${escapeHtml(jobTitleOf(h))}`
+      : (h.subject ? escapeHtml(h.subject) : 'Tarefa de estudo');
+    return `
+    <li class="tgroup" data-scope="history" data-id="${h.id}">
+      <div class="task is-done" style="--p:var(--ok)">
+        <span class="hist-icon">${HOURS_SVG}</span>
+        <div class="task-info">
+          <span class="t-title">${escapeHtml(h.title)}</span>
+          <div class="t-meta">
+            <span class="tag">${src}</span>
+            <span class="tag prio-${h.priority}">${PRIOS[h.priority].label}</span>
+            ${h.due ? `<span class="tag">prazo ${fmtDate(h.due)}</span>` : ''}
+            <span class="tag">concluída ${relTime(h.completedAt)}</span>
+            <span class="tag">expira em ${left}d</span>
+          </div>
+        </div>
+        <div class="task-actions">
+          <button data-act="restore" title="Restaurar como pendente">${UNDO_SVG}</button>
+        </div>
+      </div>
+    </li>`;
+  }).join('');
+}
+
+function restoreHistoryEntry(entry) {
+  if (!entry) return;
+  if (entry.kind === 'item') {
+    const job = jobs.find(j => j.id === entry.jobId);
+    if (!job) {
+      toast('O trabalho deste item não existe mais', 'warn');
+      return;
+    }
+    job.items.unshift({
+      id: uid(),
+      title: entry.title,
+      priority: entry.priority || 'media',
+      due: entry.due || '',
+      done: false,
+      notes: entry.notes || '',
+      subtasks: (entry.subtasks || []).map(s => Object.assign({}, s, { id: uid() })),
+      createdAt: Date.now(),
+      completedAt: null
+    });
+    job.updatedAt = Date.now();
+    persistJobs();
+  } else {
+    tasks.unshift({
+      id: uid(),
+      title: entry.title,
+      subject: entry.subject || '',
+      priority: entry.priority || 'media',
+      due: entry.due || '',
+      done: false,
+      notes: entry.notes || '',
+      subtasks: (entry.subtasks || []).map(s => Object.assign({}, s, { id: uid() })),
+      createdAt: Date.now(),
+      completedAt: null
+    });
+    persistTasks();
+  }
+  history = history.filter(h => h.id !== entry.id);
+  persistHistory();
+  renderAll();
+  toast(`"${entry.title}" restaurada como pendente`, 'ok');
+  setStatus('Item restaurado do histórico');
+}
+
+/* ================= jobs ================= */
+function normalizeItem(i) {
+  if (!i || !i.title) return null;
+  return {
+    id: i.id || uid(),
+    title: i.title,
+    priority: PRIOS[i.priority] ? i.priority : 'media',
+    due: i.due || '',
+    done: !!i.done,
+    notes: i.notes || '',
+    subtasks: (Array.isArray(i.subtasks) ? i.subtasks : [])
+      .filter(s => s && s.title)
+      .map(s => ({
+        id: s.id || uid(), title: s.title, done: !!s.done,
+        createdAt: s.createdAt || Date.now(), completedAt: s.completedAt || null
+      })),
+    createdAt: i.createdAt || Date.now(),
+    completedAt: i.completedAt || null
+  };
+}
+
+const activeJob = () => jobs.find(j => j.id === ui.activeJobId) || null;
+
+const jobProgress = job => {
+  const items = job.items || [];
+  const done = items.filter(i => i.done).length;
+  return { done, total: items.length, pct: items.length ? Math.round((done / items.length) * 100) : 0 };
+};
+
+const dueTagFor = (due, done) => {
+  if (!due) return '';
+  const d = daysUntil(due);
+  if (done) return `<span class="tag">✓ ${fmtDate(due)}</span>`;
+  if (d < 0) return `<span class="tag due-late">${fmtDate(due)} · atrasada</span>`;
+  if (d === 0) return '<span class="tag due-today">hoje</span>';
+  if (d === 1) return '<span class="tag due-today">amanhã</span>';
+  if (d <= 7) return `<span class="tag">${fmtDate(due)} · ${d}d</span>`;
+  return `<span class="tag">${fmtDate(due)}</span>`;
+};
+
+function jobQuery() {
+  return (ui.search.trim() || ui.jobSearch.trim()).toLowerCase();
+}
+
+function renderJobList() {
+  const q = jobQuery();
+  const list = jobs
+    .filter(j => !q || `${j.title} ${j.company || ''}`.toLowerCase().includes(q))
+    .sort((a, b) => b.updatedAt - a.updatedAt);
+
+  const pending = jobs.reduce((n, j) => n + j.items.filter(i => !i.done).length, 0);
+  el('nav-count-jobs').textContent = pending;
+
+  const box = el('job-list');
+  if (!list.length) {
+    box.innerHTML = `<li class="empty">${q ? 'Nenhum resultado para "' + escapeHtml(q) + '"' : 'Nenhum trabalho ainda. Crie o primeiro!'}</li>`;
+    return;
+  }
+
+  box.innerHTML = list.map(j => {
+    const p = jobProgress(j);
+    const st = JOB_STATUS[j.status] || JOB_STATUS.ativo;
+    return `
+    <li>
+      <button class="job-item ${j.id === ui.activeJobId ? 'is-active' : ''}" data-job-id="${j.id}">
+        <span class="job-item-top">
+          <strong>${escapeHtml(j.title)}</strong>
+          <em class="tag" style="color:${st.color};border-color:${st.color}55">${st.label}</em>
+        </span>
+        ${j.company ? `<span class="job-co">${escapeHtml(j.company)}</span>` : ''}
+        <span class="job-bar"><span class="job-bar-done" style="width:${p.pct}%"></span></span>
+        <span class="job-meta-line">
+          <span>${p.done}/${p.total} itens</span>
+          <span>${j.links.length} destaque${j.links.length !== 1 ? 's' : ''}</span>
+        </span>
+      </button>
+    </li>`;
+  }).join('');
+}
+
+function renderJobDetail() {
+  const job = activeJob();
+  el('job-empty').classList.toggle('is-hidden', !!job);
+  el('job-body').classList.toggle('is-hidden', !job);
+  if (!job) {
+    ui.jobNoteLoadedFor = null;
+    return;
+  }
+
+  const st = JOB_STATUS[job.status] || JOB_STATUS.ativo;
+  el('job-detail-title').textContent = job.title;
+  el('job-detail-meta').innerHTML = [
+    `<span class="tag" style="color:${st.color};border-color:${st.color}55">${st.label}</span>`,
+    job.company ? `<span class="tag">${escapeHtml(job.company)}</span>` : '',
+    job.due ? dueTagFor(job.due, job.status === 'concluido') : '',
+    job.desc ? `<span class="job-desc">${escapeHtml(job.desc)}</span>` : ''
+  ].join('');
+
+  const p = jobProgress(job);
+  el('job-progress-bar').style.width = p.pct + '%';
+  el('job-progress-label').textContent = `${p.done}/${p.total}`;
+
+  renderLinks(job);
+  renderJobItems(job);
+
+  if (ui.jobNoteLoadedFor !== job.id) {
+    ui.jobNoteLoadedFor = job.id;
+    el('job-note-content').value = job.note.content;
+    updateJobNoteMeta();
+    renderJobPreview();
+  }
+}
+
+function renderLinks(job) {
+  const box = el('link-list');
+  if (!job.links.length) {
+    box.innerHTML = '<li class="empty">Sem destaques. Adicione o link da empresa, repositório ou documentação.</li>';
+    return;
+  }
+  box.innerHTML = job.links.map(l => `
+    <li class="link-card">
+      <a class="link-main" href="${safeUrl(l.url)}" target="_blank" rel="noopener noreferrer">
+        <strong>${escapeHtml(l.label)}</strong>
+        <small>${escapeHtml(hostOf(l.url))}</small>
+      </a>
+      <button class="link-copy" data-act="link-copy" data-link="${l.id}" title="Copiar URL">${COPY_SVG}</button>
+      <button class="link-del" data-act="link-del" data-link="${l.id}" title="Remover destaque">${DEL_SVG}</button>
+    </li>`).join('');
+}
+
+const hostOf = url => {
+  try { return new URL(url).host || url; } catch { return url; }
+};
+
+function filteredJobItems(job) {
+  const f = ui.jobFilters;
+  const q = jobQuery();
+  return job.items
+    .filter(i => {
+      if (f.status === 'pending' && i.done) return false;
+      if (f.status === 'done' && !i.done) return false;
+      if (f.priority && i.priority !== f.priority) return false;
+      if (q && !`${i.title} ${i.notes || ''}`.toLowerCase().includes(q)) return false;
+      return true;
+    })
+    .sort((a, b) => (a.done - b.done)
+      || (PRIOS[a.priority].weight - PRIOS[b.priority].weight)
+      || String(a.due || '9999').localeCompare(String(b.due || '9999'))
+      || (b.createdAt - a.createdAt));
+}
+
+function renderJobItems() {
+  const job = activeJob();
+  if (!job || !el('item-list')) return;
+  const list = filteredJobItems(job);
+  const total = job.items.length;
+  el('items-heading').textContent = `${list.length} de ${total} item${total !== 1 ? 's' : ''}`;
+
+  const box = el('item-list');
+  if (!list.length) {
+    box.innerHTML = `<li class="empty">${jobQuery() ? 'Nenhum resultado para "' + escapeHtml(jobQuery()) + '"' : 'Checklist vazio. Adicione a primeira tarefa acima.'}</li>`;
+    return;
+  }
+
+  box.innerHTML = list.map(i => `
+    <li class="tgroup" data-scope="item" data-job="${job.id}" data-id="${i.id}">
+      <div class="task ${i.done ? 'is-done' : ''} ${isLateItem(i) ? 'is-late' : ''}" style="--p:${PRIOS[i.priority].color}">
+        <button class="check" data-act="toggle" aria-label="Alternar conclusão">${CHECK_SVG}</button>
+        <div class="task-info">
+          <span class="t-title">${escapeHtml(i.title)}${subCountBadge(i)}</span>
+          <div class="t-meta">
+            <span class="tag prio-${i.priority}">${PRIOS[i.priority].label}</span>
+            ${dueTagFor(i.due, i.done)}
+            ${i.notes ? `<span class="t-note">— ${escapeHtml(i.notes)}</span>` : ''}
+          </div>
+        </div>
+        <div class="task-actions">
+          <button data-act="edit" title="Editar">${EDIT_SVG}</button>
+          <button data-act="del" class="del" title="Excluir">${DEL_SVG}</button>
+        </div>
+      </div>
+      ${subPanel(i, 'item', job.id)}
+    </li>`).join('');
+}
+
+const isLateItem = i => !i.done && i.due && daysUntil(i.due) < 0;
+
+function toggleItem(job, item) {
+  if (!job || !item) return;
+  item.done = !item.done;
+  item.completedAt = item.done ? Date.now() : null;
+  if (item.done) recordCompletion(item, 'item', job.id);
+  else unrecordCompletion('item', item.id);
+  job.updatedAt = Date.now();
+  persistJobs();
+  renderAll();
+  if (item.done) toast(`"${item.title}" concluída`, 'ok');
+}
+
+function deleteItem(job, item) {
+  if (!job || !item) return;
+  confirmAction('Excluir tarefa', `Remover "${item.title}" do trabalho "${job.title}"?`, () => {
+    job.items = job.items.filter(i => i.id !== item.id);
+    unrecordCompletion('item', item.id);
+    ui.openGroups.delete(groupKey('item', job.id, item.id));
+    job.updatedAt = Date.now();
+    persistJobs();
+    renderAll();
+    toast('Tarefa do trabalho excluída', 'warn');
+  });
+}
+
+function openItemModal(item = null, job = null) {
+  ui.editingItemId = item ? item.id : null;
+  ui.editingItemJobId = item ? job.id : null;
+  el('work-item-modal-title').textContent = item ? 'Editar tarefa' : 'Nova tarefa de trabalho';
+  el('wi-title').value = item ? item.title : '';
+  el('wi-priority').value = item ? item.priority : 'media';
+  el('wi-due').value = item ? (item.due || '') : '';
+  el('wi-done').value = item && item.done ? '1' : '0';
+  el('wi-notes').value = item ? (item.notes || '') : '';
+  openModal('work-item-modal');
+  el('wi-title').focus();
+}
+
+function saveItemFromForm() {
+  const title = el('wi-title').value.trim();
+  if (!title) return;
+  const job = jobs.find(j => j.id === ui.editingItemJobId) || activeJob();
+  if (!job) { toast('Abra um trabalho primeiro', 'warn'); return; }
+
+  const data = {
+    title,
+    priority: el('wi-priority').value,
+    due: el('wi-due').value || '',
+    done: el('wi-done').value === '1',
+    notes: el('wi-notes').value.trim()
+  };
+
+  if (ui.editingItemId) {
+    const item = job.items.find(i => i.id === ui.editingItemId);
+    if (!item) return;
+    Object.assign(item, data);
+    item.completedAt = data.done ? (item.completedAt || Date.now()) : null;
+    if (data.done) recordCompletion(item, 'item', job.id);
+    else unrecordCompletion('item', item.id);
+    toast('Tarefa atualizada', 'ok');
+  } else {
+    job.items.unshift(normalizeItem(Object.assign({ createdAt: Date.now() }, data)));
+    toast('Tarefa adicionada ao trabalho', 'ok');
+  }
+
+  job.updatedAt = Date.now();
+  persistJobs();
+  closeModals();
+  renderAll();
+  setStatus('Tarefa do trabalho salva');
+}
+
+function openJobModal(job = null) {
+  ui.editingJobId = job ? job.id : null;
+  el('job-modal-title').textContent = job ? 'Editar trabalho' : 'Novo trabalho';
+  el('j-title').value = job ? job.title : '';
+  el('j-company').value = job ? (job.company || '') : '';
+  el('j-status').value = job ? job.status : 'ativo';
+  el('j-due').value = job ? (job.due || '') : shiftISO(7);
+  el('j-desc').value = job ? (job.desc || '') : '';
+  openModal('job-modal');
+  el('j-title').focus();
+}
+
+function saveJobFromForm() {
+  const title = el('j-title').value.trim();
+  if (!title) return;
+  const data = {
+    title,
+    company: el('j-company').value.trim(),
+    status: el('j-status').value,
+    due: el('j-due').value || '',
+    desc: el('j-desc').value.trim()
+  };
+
+  if (ui.editingJobId) {
+    const job = jobs.find(j => j.id === ui.editingJobId);
+    if (!job) return;
+    Object.assign(job, data, { updatedAt: Date.now() });
+    toast('Trabalho atualizado', 'ok');
+  } else {
+    const job = Object.assign({
+      id: uid(),
+      items: [],
+      links: [],
+      note: { content: '', updatedAt: Date.now() },
+      createdAt: Date.now(),
+      updatedAt: Date.now()
+    }, data);
+    jobs.unshift(job);
+    ui.activeJobId = job.id;
+    toast('Trabalho criado', 'ok');
+  }
+
+  persistJobs();
+  closeModals();
+  renderAll();
+  setStatus('Trabalho salvo');
+}
+
+function deleteJob(job) {
+  if (!job) return;
+  const p = jobProgress(job);
+  confirmAction('Excluir trabalho', `"${job.title}" e suas ${p.total} tarefa(s), notas e destaques serão removidos. O histórico de 7 dias também some.`, () => {
+    jobs = jobs.filter(j => j.id !== job.id);
+    history = history.filter(h => h.jobId !== job.id);
+    if (ui.activeJobId === job.id) {
+      ui.activeJobId = jobs[0]?.id || null;
+      ui.jobNoteLoadedFor = null;
+    }
+    persistJobs();
+    persistHistory();
+    renderAll();
+    toast('Trabalho excluído', 'warn');
+  });
+}
+
+const normalizeUrl = raw => {
+  const v = String(raw || '').trim();
+  if (!v) return '';
+  if (/^https?:\/\//i.test(v)) return v;
+  if (/^[a-z][a-z0-9+.-]*:/i.test(v)) return '';
+  return `https://${v}`;
+};
+
+function addLink(job) {
+  const url = normalizeUrl(el('link-url').value);
+  const label = el('link-label').value.trim();
+  if (!job) return;
+  if (!url) { toast('Informe uma URL válida (ex.: empresa.com.br)', 'warn'); el('link-url').focus(); return; }
+  job.links.unshift({ id: uid(), label: label || url, url });
+  job.updatedAt = Date.now();
+  el('link-label').value = '';
+  el('link-url').value = '';
+  persistJobs();
+  renderAll();
+  toast('Destaque adicionado', 'ok');
+  setStatus('Destaque adicionado ao trabalho');
+}
+
+function copyText(text) {
+  const fallback = () => {
+    const ta = document.createElement('textarea');
+    ta.value = text;
+    ta.style.position = 'fixed';
+    ta.style.opacity = '0';
+    document.body.appendChild(ta);
+    ta.select();
+    try { document.execCommand('copy'); toast('URL copiada', 'ok'); }
+    catch { toast('Não consegui copiar a URL', 'warn'); }
+    ta.remove();
+  };
+  if (navigator.clipboard && navigator.clipboard.writeText) {
+    navigator.clipboard.writeText(text)
+      .then(() => toast('URL copiada', 'ok'))
+      .catch(fallback);
+  } else fallback();
+}
+
+function updateJobNoteMeta() {
+  const v = el('job-note-content').value;
+  const words = v.trim() ? v.trim().split(/\s+/).length : 0;
+  el('job-note-meta').textContent = `${words} palavra${words !== 1 ? 's' : ''} • ${v.length} caracteres`;
+}
+
+function renderJobPreview() {
+  const box = el('job-note-preview');
+  if (!box) return;
+  const html = mdToHtml(el('job-note-content').value);
+  box.innerHTML = html || '<p class="md-empty">Nada para visualizar ainda — comece a escrever em Markdown.</p>';
+}
+
+function saveJobNote() {
+  const job = activeJob();
+  if (!job) return;
+  job.note.content = el('job-note-content').value;
+  job.note.updatedAt = Date.now();
+  job.updatedAt = Date.now();
+  persistJobs();
+}
+
+function downloadJobNoteAsMd() {
+  const job = activeJob();
+  if (!job) { toast('Abra um trabalho antes de exportar', 'warn'); return; }
+  const front = [`# ${job.title}`];
+  if (job.company) front.push(`_${job.company}_`);
+  front.push(`_atualizado em ${fmtDateTime(job.note.updatedAt)} · StudyTrack_`, '');
+  const body = `${front.join('\n')}\n${job.note.content.trim()}\n`;
+  const name = job.title.toLowerCase().normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+    .replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '') || 'trabalho';
+  const url = URL.createObjectURL(new Blob([body], { type: 'text/markdown;charset=utf-8' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `${name}.md`;
+  a.click();
+  URL.revokeObjectURL(url);
+  toast(`"${name}.md" baixado`, 'ok');
+  setStatus('Notas do trabalho exportadas como Markdown');
+}
+
 /* ================= dashboard ================= */
 function renderStats() {
   const total = tasks.length;
@@ -532,6 +1366,7 @@ function renderStats() {
     { lbl: 'Concluídas', val: done, sub: `${pct}% do total`, c: 'var(--ok)' },
     { lbl: 'Para hoje', val: today, sub: today ? 'não deixe pra depois' : 'nada marcado', c: 'var(--info)' },
     { lbl: 'Atrasadas', val: late, sub: late ? 'reagende agora' : 'tudo em dia', c: late ? 'var(--warn)' : 'var(--muted)' },
+    { lbl: 'Trabalhos', val: jobs.length, sub: `${jobs.reduce((n, j) => n + j.items.filter(i => !i.done).length, 0)} itens no checklist`, c: 'var(--info)' },
     { lbl: 'Notas', val: notes.length, sub: `${notes.filter(n => n.pinned).length} fixadas`, c: 'var(--accent)' }
   ];
 
@@ -816,7 +1651,7 @@ function renderPreview() {
 
 function setNotesMode(mode) {
   prefs.notesMode = ['edit', 'split', 'preview'].includes(mode) ? mode : 'split';
-  el('editor-body').dataset.mode = prefs.notesMode;
+  $$('.editor-body').forEach(b => { b.dataset.mode = prefs.notesMode; });
   $$('.mode-btn').forEach(b => b.classList.toggle('is-active', b.dataset.mode === prefs.notesMode));
   save(K.prefs, prefs);
 }
@@ -876,11 +1711,14 @@ function updateNote(patch) {
 const VIEW_META = {
   dashboard: ['Dashboard', 'Visão geral do seu estudo'],
   tasks: ['Tarefas', 'Organize seus estudos por matéria e prioridade'],
+  jobs: ['Trabalhos', 'Checklist, notas e destaques de cada trabalho'],
   notes: ['Notas', 'Resumos, snippets e referências de estudo'],
+  history: ['Histórico', 'Concluídos dos últimos 7 dias'],
   themes: ['Temas', 'Personalize a aparência do StudyTrack']
 };
 
 function setView(view) {
+  if (!VIEW_META[view]) return;
   ui.view = view;
   $$('.view').forEach(v => v.classList.toggle('is-hidden', v.id !== `view-${view}`));
   $$('.nav-item').forEach(b => b.classList.toggle('is-active', b.dataset.view === view));
@@ -900,12 +1738,17 @@ function renderAll() {
   renderUpcoming();
   renderRecentNotes();
   renderTaskList();
+  renderJobList();
+  renderJobDetail();
   renderNoteList();
   renderEditor();
+  renderHistory();
   el('filter-priority').value = ui.filters.priority;
   el('filter-status').value = ui.filters.status;
   el('filter-overdue').checked = ui.filters.overdue;
   el('task-sort').value = ui.filters.sort;
+  el('item-filter-priority').value = ui.jobFilters.priority;
+  el('item-filter-status').value = ui.jobFilters.status;
 }
 
 /* ================= task modal ================= */
@@ -937,15 +1780,20 @@ function saveTaskFromForm() {
   if (ui.editingTaskId) {
     const t = tasks.find(x => x.id === ui.editingTaskId);
     Object.assign(t, data);
-    if (data.done && !t.completedAt) t.completedAt = Date.now();
+    if (data.done) t.completedAt = t.completedAt || Date.now();
     if (!data.done) t.completedAt = null;
+    if (data.done) recordCompletion(t, 'task');
+    else unrecordCompletion('task', t.id);
     toast('Tarefa atualizada', 'ok');
   } else {
-    tasks.unshift({
+    const created = {
       id: uid(), ...data,
+      subtasks: [],
       createdAt: Date.now(),
       completedAt: data.done ? Date.now() : null
-    });
+    };
+    tasks.unshift(created);
+    if (data.done) recordCompletion(created, 'task');
     toast('Tarefa criada', 'ok');
   }
   persistTasks();
@@ -960,6 +1808,8 @@ function toggleTask(id) {
   if (!t) return;
   t.done = !t.done;
   t.completedAt = t.done ? Date.now() : null;
+  if (t.done) recordCompletion(t, 'task');
+  else unrecordCompletion('task', t.id);
   persistTasks();
   renderAll();
   if (t.done) toast(`"${t.title}" concluída`, 'ok');
@@ -995,6 +1845,11 @@ function seedData() {
     t('ler documentação', 'English', 'baixa', '', true, '', 10),
     t('Exercícios de ordenação e busca binária', 'Algoritmos', 'media', shiftISO(-3), false, '', 11)
   ];
+  tasks[2].subtasks = [
+    { id: uid() + 's1', title: 'modelo de dados', done: true, createdAt: base, completedAt: base },
+    { id: uid() + 's2', title: 'tela de listagem', done: false, createdAt: base, completedAt: null },
+    { id: uid() + 's3', title: 'persistir em localStorage', done: false, createdAt: base, completedAt: null }
+  ];
   notes = [
     {
       id: uid() + 'n1', title: 'JavaScript — Array methods',
@@ -1021,8 +1876,89 @@ function seedData() {
   subjects = SUBJECTS_DEFAULT.slice();
   prefs.subjectColors = {};
   subjects.forEach((s, i) => { prefs.subjectColors[s] = SUBJECT_COLORS[i % SUBJECT_COLORS.length]; });
+
+  const item = (title, priority, due, done, notes, subs, offset) => normalizeItem({
+    id: uid() + 'i' + offset, title, priority, due, done, notes,
+    subtasks: (subs || []).map((s, n) => ({
+      id: uid() + 's' + offset + n, title: s[0], done: !!s[1],
+      createdAt: base - offset * 1000, completedAt: s[1] ? base - offset * 500 : null
+    })),
+    createdAt: base - offset * 1000,
+    completedAt: done ? base - offset * 500 : null
+  });
+
+  jobs = [
+    {
+      id: uid() + 'j1',
+      title: 'Sistema de estoque interno',
+      company: 'Acme Ltda',
+      status: 'ativo',
+      due: shiftISO(14),
+      desc: 'Projeto contratado pela Acme: controle de entradas, saídas e relatório mensal.',
+      items: [
+        item('Modelar sistema', 'alta', shiftISO(3), false, 'revisar com o cliente', [
+          ['segurança', true], ['stack', true], ['hospedagem', false]
+        ], 1),
+        item('Definir stack', 'alta', shiftISO(1), false, 'Node + Postgres + Docker', [], 2),
+        item('Diagramar banco de dados', 'media', shiftISO(5), false, '', [], 3),
+        item('Protótipo do relatório mensal', 'baixa', shiftISO(9), false, 'PDF com gráfico de giro', [], 4),
+        item('Enviar proposta comercial', 'media', '', true, 'R$ 12.500', [], 5)
+      ],
+      links: [
+        { id: uid() + 'l1', label: 'Site da Acme', url: 'https://example.com/acme' },
+        { id: uid() + 'l2', label: 'Repositório do projeto', url: 'https://github.com/exemplo/stock' },
+        { id: uid() + 'l3', label: 'Documentação do contrato', url: 'https://example.com/contrato.pdf' }
+      ],
+      note: {
+        content: `# Escopo\n\n- Controle de **entradas e saídas**\n- Relatório mensal em PDF\n- Integração com o sistema fiscal antigo\n\n## Stack decidida\n\n\`\`\`js\nNode 20 + Express\nPostgreSQL 16\nDocker Compose\n\`\`\`\n\n> Prazo apertado: 14 dias. Priorizar o CRUD antes do relatório.`,
+        updatedAt: base - 3600000
+      },
+      createdAt: base - 8e6,
+      updatedAt: base - 3600000
+    },
+    {
+      id: uid() + 'j2',
+      title: 'Site institucional',
+      company: 'Studio Aurora',
+      status: 'ativo',
+      due: shiftISO(21),
+      desc: 'Landing page + portfólio, deploy na Vercel.',
+      items: [
+        item('Escolher tipografia', 'baixa', '', true, '', [], 1),
+        item('Montar hero section', 'media', shiftISO(4), false, '', [], 2),
+        item('Configurar domínio', 'media', shiftISO(7), false, 'aurora.studio', [], 3)
+      ],
+      links: [{ id: uid() + 'l4', label: 'Referência visual', url: 'https://example.com/inspiracao' }],
+      note: {
+        content: `# Brief\n\nCliente pediu algo **limpo** e rápido. Sem framework SPA se o JS não for necessário.`,
+        updatedAt: base - 5e6
+      },
+      createdAt: base - 6e6,
+      updatedAt: base - 5e6
+    }
+  ];
+  ui.activeJobId = jobs[0].id;
+
+  history = [
+    {
+      id: uid() + 'h1', key: 'task:' + tasks[9].id, kind: 'task', jobId: null, originId: tasks[9].id,
+      title: tasks[9].title, subject: tasks[9].subject, priority: tasks[9].priority,
+      due: tasks[9].due, notes: tasks[9].notes, subtasks: [],
+      completedAt: base - 86400000, expiresAt: base - 86400000 + 7 * DAY
+    },
+    {
+      id: uid() + 'h2', key: 'item:' + jobs[0].items[4].id, kind: 'item', jobId: jobs[0].id,
+      originId: jobs[0].items[4].id, title: jobs[0].items[4].title, subject: '',
+      priority: jobs[0].items[4].priority, due: jobs[0].items[4].due,
+      notes: jobs[0].items[4].notes, subtasks: jobs[0].items[4].subtasks,
+      completedAt: base - 3 * 86400000, expiresAt: base - 3 * 86400000 + 7 * DAY
+    }
+  ];
+
   ui.activeNoteId = notes[0].id;
   ui.filters.subject = '';
+  ui.jobNoteLoadedFor = null;
+  ui.openGroups = new Set([groupKey('task', '', tasks[2].id)]);
   persistAll();
   renderAll();
   renderSubjectManager();
@@ -1031,7 +1967,7 @@ function seedData() {
 }
 
 function exportData() {
-  const blob = new Blob([JSON.stringify({ version: 1, tasks, notes, prefs, subjects }, null, 2)], { type: 'application/json' });
+  const blob = new Blob([JSON.stringify({ version: 2, tasks, notes, prefs, subjects, jobs, history }, null, 2)], { type: 'application/json' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
   a.download = `studytrack-${todayISO()}.json`;
@@ -1053,8 +1989,15 @@ function importData(file) {
       } else {
         subjects = migrateSubjects();
       }
+      if (Array.isArray(data.jobs)) {
+        jobs = data.jobs.map(j => Object.assign({ items: [], links: [], note: { content: '' } }, j));
+      }
+      if (Array.isArray(data.history)) history = data.history;
       ui.filters.subject = '';
       ui.activeNoteId = notes[0]?.id || null;
+      ui.activeJobId = jobs[0]?.id || null;
+      ui.jobNoteLoadedFor = null;
+      ui.openGroups = new Set();
       persistAll();
       applyPrefs();
       renderAll();
@@ -1067,15 +2010,23 @@ function importData(file) {
 }
 
 function resetAll() {
-  confirmAction('Apagar tudo', 'Todas as tarefas, notas e preferências serão removidas. Continuar?', () => {
+  confirmAction('Apagar tudo', 'Tarefas, trabalhos, notas, histórico e preferências serão removidos. Continuar?', () => {
     tasks = [];
     notes = [];
+    jobs = [];
+    history = [];
     prefs = Object.assign({}, defaultPrefs);
     subjects = SUBJECTS_DEFAULT.slice();
     ui.activeNoteId = null;
+    ui.activeJobId = null;
+    ui.jobNoteLoadedFor = null;
+    ui.openGroups = new Set();
     ui.filters.subject = '';
+    wallpaper = null;
+    try { localStorage.removeItem(K.wallpaper); } catch {}
     persistAll();
     applyPrefs();
+    applyWallpaper();
     renderAll();
     renderSubjectManager();
     toast('Dados apagados', 'warn');
@@ -1128,6 +2079,21 @@ function bindEvents() {
           toast('Nota excluída', 'warn');
         });
       }
+      if (a === 'new-job') openJobModal();
+      if (a === 'edit-job') openJobModal(activeJob());
+      if (a === 'delete-job') deleteJob(activeJob());
+      if (a === 'job-note-download') downloadJobNoteAsMd();
+      if (a === 'clear-history') {
+        if (!history.length) { toast('Histórico vazio', 'info'); return; }
+        confirmAction('Limpar histórico', `Remover ${history.length} registro(s) de até ${HISTORY_DAYS} dias?`, () => {
+          history = [];
+          persistHistory();
+          renderAll();
+          toast('Histórico limpo', 'warn');
+        });
+      }
+      if (a === 'wall-pick') el('wall-file').click();
+      if (a === 'wall-remove') removeWallpaper();
     }
 
     const themeCard = e.target.closest('[data-theme-id]');
@@ -1162,13 +2128,63 @@ function bindEvents() {
       renderAll();
     }
 
-    const taskEl = e.target.closest('.task');
-    if (taskEl) {
+    const group = e.target.closest('.tgroup');
+    if (group) {
+      const scope = group.dataset.scope;
       const btn = e.target.closest('[data-act]');
+
+      if (scope === 'history') {
+        if (btn && btn.dataset.act === 'restore') restoreHistoryEntry(history.find(h => h.id === group.dataset.id));
+        return;
+      }
+
+      const found = findNode(scope, group.dataset.job, group.dataset.id);
+      if (!found) return;
+
       if (btn) {
-        if (btn.dataset.act === 'toggle') toggleTask(taskEl.dataset.id);
-        if (btn.dataset.act === 'edit') openTaskModal(tasks.find(t => t.id === taskEl.dataset.id));
-        if (btn.dataset.act === 'del') deleteTask(taskEl.dataset.id);
+        const act = btn.dataset.act;
+        const subRow = btn.closest('.sub-row');
+        if (act === 'toggle') {
+          scope === 'task' ? toggleTask(found.node.id) : toggleItem(found.job, found.node);
+        }
+        if (act === 'edit') {
+          scope === 'task' ? openTaskModal(found.node) : openItemModal(found.node, found.job);
+        }
+        if (act === 'del') {
+          scope === 'task' ? deleteTask(found.node.id) : deleteItem(found.job, found.node);
+        }
+        if (act === 'sub-toggle' && subRow) toggleSubtask(found, subRow.dataset.subId);
+        if (act === 'sub-del' && subRow) deleteSubtask(found, subRow.dataset.subId);
+        return;
+      }
+
+      if (!e.target.closest('.subs')) toggleGroup(scope, group.dataset.job, group.dataset.id);
+      return;
+    }
+
+    const jobBtn = e.target.closest('[data-job-id]');
+    if (jobBtn) {
+      if (ui.activeJobId !== jobBtn.dataset.jobId) {
+        ui.activeJobId = jobBtn.dataset.jobId;
+        ui.jobNoteLoadedFor = null;
+      }
+      renderJobList();
+      renderJobDetail();
+      return;
+    }
+
+    const linkBtn = e.target.closest('.link-card [data-act]');
+    if (linkBtn) {
+      const job = activeJob();
+      const found = job && job.links.find(l => l.id === linkBtn.dataset.link);
+      if (!found) return;
+      if (linkBtn.dataset.act === 'link-copy') copyText(found.url);
+      if (linkBtn.dataset.act === 'link-del') {
+        job.links = job.links.filter(l => l.id !== found.id);
+        job.updatedAt = Date.now();
+        persistJobs();
+        renderAll();
+        toast('Destaque removido', 'warn');
       }
       return;
     }
@@ -1209,6 +2225,54 @@ function bindEvents() {
   el('filter-status').addEventListener('change', e => { ui.filters.status = e.target.value; renderAll(); });
   el('filter-overdue').addEventListener('change', e => { ui.filters.overdue = e.target.checked; renderAll(); });
   el('task-sort').addEventListener('change', e => { ui.filters.sort = e.target.value; renderTaskList(); });
+
+  el('job-search').addEventListener('input', e => { ui.jobSearch = e.target.value; renderJobList(); });
+  el('item-filter-priority').addEventListener('change', e => { ui.jobFilters.priority = e.target.value; renderJobItems(); });
+  el('item-filter-status').addEventListener('change', e => { ui.jobFilters.status = e.target.value; renderJobItems(); });
+
+  el('job-form').addEventListener('submit', e => { e.preventDefault(); saveJobFromForm(); });
+  el('work-item-form').addEventListener('submit', e => { e.preventDefault(); saveItemFromForm(); });
+
+  el('link-form').addEventListener('submit', e => {
+    e.preventDefault();
+    if (!activeJob()) { toast('Abra um trabalho primeiro', 'warn'); return; }
+    addLink(activeJob());
+  });
+
+  el('item-form').addEventListener('submit', e => {
+    e.preventDefault();
+    const job = activeJob();
+    const input = el('item-title');
+    const title = input.value.trim();
+    if (!job) { toast('Abra um trabalho primeiro', 'warn'); return; }
+    if (!title) { input.focus(); return; }
+    job.items.unshift(normalizeItem({
+      title,
+      priority: el('item-priority').value,
+      due: el('item-due').value || '',
+      notes: '',
+      createdAt: Date.now()
+    }));
+    job.updatedAt = Date.now();
+    input.value = '';
+    persistJobs();
+    renderAll();
+    input.focus();
+    toast('Item adicionado ao checklist', 'ok');
+  });
+
+  document.addEventListener('submit', e => {
+    const form = e.target.closest('.subs-form');
+    if (!form) return;
+    e.preventDefault();
+    const input = form.querySelector('.subs-input');
+    const title = input.value.trim();
+    if (!title) return;
+    const found = findNode(form.dataset.scope, form.dataset.job, form.dataset.id);
+    if (!addSubtask(found, title)) return;
+    const again = document.querySelector(`.subs-form[data-scope="${form.dataset.scope}"][data-id="${form.dataset.id}"] .subs-input`);
+    if (again) { again.focus(); again.scrollIntoView({ block: 'nearest' }); }
+  });
 
   el('task-form').addEventListener('submit', e => { e.preventDefault(); saveTaskFromForm(); });
   el('subject-add-form').addEventListener('submit', e => {
@@ -1284,33 +2348,66 @@ function bindEvents() {
     updateNote({ content: e.target.value });
   });
 
-  $('.editor-toolbar').addEventListener('click', e => {
-    const modeBtn = e.target.closest('.mode-btn');
-    if (modeBtn) { setNotesMode(modeBtn.dataset.mode); return; }
+  el('job-note-content').addEventListener('input', e => {
+    updateJobNoteMeta();
+    renderJobPreview();
+    saveJobNote();
+  });
 
-    const tool = e.target.closest('.tool');
-    if (!tool || !tool.dataset.wrap && !tool.dataset.prefix) return;
-    const ta = el('note-content');
-    const start = ta.selectionStart, end = ta.selectionEnd;
-    const sel = ta.value.slice(start, end);
-    let ins, caret;
-    if (tool.dataset.wrap) {
-      const w = tool.dataset.wrap;
-      ins = w + sel + w;
-      caret = start + ins.length;
-    } else {
-      const pfx = tool.dataset.prefix;
-      ins = sel
-        ? sel.split('\n').map(l => pfx + l).join('\n')
-        : pfx;
-      caret = start + ins.length;
-    }
-    ta.value = ta.value.slice(0, start) + ins + ta.value.slice(end);
-    ta.focus();
-    ta.setSelectionRange(caret, caret);
-    updateNoteMeta();
-    renderPreview();
-    updateNote({ content: ta.value });
+  $$('.editor-toolbar').forEach(bar => {
+    bar.addEventListener('click', e => {
+      const modeBtn = e.target.closest('.mode-btn');
+      if (modeBtn) { setNotesMode(modeBtn.dataset.mode); return; }
+
+      const tool = e.target.closest('.tool');
+      if (!tool || !tool.dataset.wrap && !tool.dataset.prefix) return;
+      const ta = el(bar.dataset.target);
+      if (!ta) return;
+      const start = ta.selectionStart, end = ta.selectionEnd;
+      const sel = ta.value.slice(start, end);
+      let ins, caret;
+      if (tool.dataset.wrap) {
+        const w = tool.dataset.wrap;
+        ins = w + sel + w;
+        caret = start + ins.length;
+      } else {
+        const pfx = tool.dataset.prefix;
+        ins = sel
+          ? sel.split('\n').map(l => pfx + l).join('\n')
+          : pfx;
+        caret = start + ins.length;
+      }
+      ta.value = ta.value.slice(0, start) + ins + ta.value.slice(end);
+      ta.focus();
+      ta.setSelectionRange(caret, caret);
+      if (bar.dataset.kind === 'job') {
+        updateJobNoteMeta();
+        renderJobPreview();
+        saveJobNote();
+      } else {
+        updateNoteMeta();
+        renderPreview();
+        updateNote({ content: ta.value });
+      }
+    });
+  });
+
+  const wallRange = (id, key, factor) => {
+    el(id).addEventListener('input', e => {
+      if (!wallpaper) return;
+      wallpaper[key] = Number(e.target.value) / factor;
+      try { localStorage.setItem(K.wallpaper, JSON.stringify(wallpaper)); } catch {}
+      applyWallpaperVars();
+      renderWallpaperUI();
+    });
+  };
+  wallRange('wall-veil', 'veil', 100);
+  wallRange('wall-alpha', 'alpha', 1);
+  wallRange('wall-blur', 'blur', 1);
+
+  el('wall-file').addEventListener('change', e => {
+    if (e.target.files[0]) uploadWallpaper(e.target.files[0]);
+    e.target.value = '';
   });
 
   const pickAccent = e => {
@@ -1362,9 +2459,12 @@ function bindEvents() {
 /* ================= init ================= */
 function init() {
   applyPrefs();
+  applyWallpaper();
   if (!tasks.length && !notes.length) seedData();
+  purgeHistory();
   bindEvents();
   setView('dashboard');
+  setInterval(purgeHistory, 3600000);
 }
 
 init();
