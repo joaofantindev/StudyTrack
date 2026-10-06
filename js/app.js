@@ -39,7 +39,7 @@ const parseISO = s => {
 const daysUntil = s => Math.round((parseISO(s) - parseISO(todayISO())) / 86400000);
 
 const fmtDate = s => {
-  const d = parseISO(s);
+  const d = typeof s === 'number' ? new Date(s) : parseISO(s);
   return d.toLocaleDateString('pt-BR', { day: '2-digit', month: 'short' });
 };
 const fmtDateTime = ts => new Date(ts).toLocaleString('pt-BR', {
@@ -139,6 +139,7 @@ let ui = {
   jobSearch: '',
   jobNoteLoadedFor: null,
   jobFilters: { priority: '', status: 'pending' },
+  jobFilterStatus: 'todos',
   editingJobId: null,
   editingItemId: null,
   editingItemJobId: null,
@@ -345,9 +346,9 @@ function renderWallpaperUI() {
   if (veil) veil.value = Math.round((wallpaper?.veil ?? 0.35) * 100);
   if (alpha) alpha.value = wallpaper?.alpha ?? 90;
   if (blur) blur.value = wallpaper?.blur ?? 3;
-  el('wall-veil-val').textContent = `${Math.round((wallpaper?.veil ?? 0.35) * 100)}%`;
-  el('wall-alpha-val').textContent = `${wallpaper?.alpha ?? 90}%`;
-  el('wall-blur-val').textContent = `${wallpaper?.blur ?? 3}px`;
+  if (el('wall-veil-val')) el('wall-veil-val').textContent = `${Math.round((wallpaper?.veil ?? 0.35) * 100)}%`;
+  if (el('wall-alpha-val')) el('wall-alpha-val').textContent = `${wallpaper?.alpha ?? 90}%`;
+  if (el('wall-blur-val')) el('wall-blur-val').textContent = `${wallpaper?.blur ?? 3}px`;
 }
 
 function applyWallpaper() {
@@ -429,11 +430,13 @@ function uploadWallpaper(file) {
 }
 
 function removeWallpaper() {
-  wallpaper = null;
-  try { localStorage.removeItem(K.wallpaper); } catch {}
-  applyWallpaper();
-  toast('Plano de fundo removido', 'warn');
-  setStatus('Plano de fundo removido');
+  confirmAction('Remover plano de fundo', 'Tem certeza que deseja remover o wallpaper?', () => {
+    wallpaper = null;
+    try { localStorage.removeItem(K.wallpaper); } catch {}
+    applyWallpaper();
+    toast('Plano de fundo removido', 'warn');
+    setStatus('Plano de fundo removido');
+  });
 }
 
 /* ================= subjects ================= */
@@ -778,6 +781,12 @@ function addSubtask(found, title) {
   subtasks(found.node).push({
     id: uid(), title: clean, done: false, createdAt: Date.now(), completedAt: null
   });
+  if (found.node.done) {
+    found.node.done = false;
+    found.node.completedAt = null;
+    if (found.job) unrecordCompletion('item', found.node.id);
+    else unrecordCompletion('task', found.node.id);
+  }
   found.node.completedAt = found.node.done ? (found.node.completedAt || Date.now()) : null;
   if (found.job) found.job.updatedAt = Date.now();
   persistNode(found);
@@ -790,13 +799,52 @@ function toggleSubtask(found, subId) {
   if (!sub) return;
   sub.done = !sub.done;
   sub.completedAt = sub.done ? Date.now() : null;
+
+  const list = subtasks(found.node);
+  const allDone = list.length > 0 && list.every(s => s.done);
+  const wasDone = !!found.node.done;
+
+  if (allDone && !wasDone) {
+    found.node.done = true;
+    found.node.completedAt = Date.now();
+    if (found.job) {
+      recordCompletion(found.node, 'item', found.job.id);
+      found.job.updatedAt = Date.now();
+    } else {
+      recordCompletion(found.node, 'task');
+    }
+  } else if (!allDone && wasDone) {
+    found.node.done = false;
+    found.node.completedAt = null;
+    if (found.job) unrecordCompletion('item', found.node.id);
+    else unrecordCompletion('task', found.node.id);
+  }
+
   persistNode(found);
   renderAll();
 }
 
 function deleteSubtask(found, subId) {
   if (!found) return;
-  found.node.subtasks = subtasks(found.node).filter(s => s.id !== subId);
+  const list = subtasks(found.node).filter(s => s.id !== subId);
+  found.node.subtasks = list;
+  const allDone = list.length > 0 && list.every(s => s.done);
+  const wasDone = !!found.node.done;
+  if (allDone && !wasDone) {
+    found.node.done = true;
+    found.node.completedAt = Date.now();
+    if (found.job) {
+      recordCompletion(found.node, 'item', found.job.id);
+      found.job.updatedAt = Date.now();
+    } else {
+      recordCompletion(found.node, 'task');
+    }
+  } else if (!allDone && wasDone) {
+    found.node.done = false;
+    found.node.completedAt = null;
+    if (found.job) unrecordCompletion('item', found.node.id);
+    else unrecordCompletion('task', found.node.id);
+  }
   persistNode(found);
   renderAll();
 }
@@ -875,12 +923,46 @@ function renderHistory() {
     return;
   }
 
-  box.innerHTML = list.map(h => {
-    const left = Math.max(0, Math.ceil((h.expiresAt - Date.now()) / DAY));
-    const src = h.kind === 'item'
-      ? `Trabalho: ${escapeHtml(jobTitleOf(h))}`
-      : (h.subject ? escapeHtml(h.subject) : 'Tarefa de estudo');
-    return `
+  const groups = {};
+  const today = todayISO();
+  list.forEach(h => {
+    const d = new Date(h.completedAt);
+    const ds = `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+    let key = ds;
+    if (ds === today) key = 'Hoje';
+    else {
+      const d2 = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+      const t2 = new Date(new Date(today).getFullYear(), new Date(today).getMonth(), new Date(today).getDate());
+      const diff = Math.round((t2 - d2) / DAY);
+      if (diff === 1) key = 'Ontem';
+      else key = d.toLocaleDateString('pt-BR');
+    }
+    groups[key] = groups[key] || [];
+    groups[key].push(h);
+  });
+
+  const order = Object.keys(groups).sort((a, b) => {
+    if (a === 'Hoje') return -1;
+    if (b === 'Hoje') return 1;
+    if (a === 'Ontem') return -1;
+    if (b === 'Ontem') return 1;
+    const pa = a.split('/');
+    const pb = b.split('/');
+    if (pa.length === 3 && pb.length === 3) {
+      return new Date(pb[2], pb[1]-1, pb[0]) - new Date(pa[2], pa[1]-1, pa[0]);
+    }
+    return 0;
+  });
+
+  const out = [];
+  order.forEach(key => {
+    out.push(`<li class="hist-group"><span class="hist-group-title">${escapeHtml(key)}</span></li>`);
+    groups[key].forEach(h => {
+      const left = Math.max(0, Math.ceil((h.expiresAt - Date.now()) / DAY));
+      const src = h.kind === 'item'
+        ? `Trabalho: ${escapeHtml(jobTitleOf(h))}`
+        : (h.subject ? escapeHtml(h.subject) : 'Tarefa de estudo');
+      out.push(`
     <li class="tgroup" data-scope="history" data-id="${h.id}">
       <div class="task is-done" style="--p:var(--ok)">
         <span class="hist-icon">${HOURS_SVG}</span>
@@ -898,8 +980,11 @@ function renderHistory() {
           <button data-act="restore" title="Restaurar como pendente">${UNDO_SVG}</button>
         </div>
       </div>
-    </li>`;
-  }).join('');
+    </li>`);
+    });
+  });
+
+  box.innerHTML = out.join('');
 }
 
 function restoreHistoryEntry(entry) {
@@ -991,8 +1076,13 @@ function jobQuery() {
 
 function renderJobList() {
   const q = jobQuery();
+  const s = ui.jobFilterStatus || 'todos';
   const list = jobs
-    .filter(j => !q || `${j.title} ${j.company || ''}`.toLowerCase().includes(q))
+    .filter(j => {
+      if (s !== 'todos' && j.status !== s) return false;
+      if (q && !`${j.title} ${j.company || ''}`.toLowerCase().includes(q)) return false;
+      return true;
+    })
     .sort((a, b) => b.updatedAt - a.updatedAt);
 
   const pending = jobs.reduce((n, j) => n + j.items.filter(i => !i.done).length, 0);
@@ -1009,7 +1099,7 @@ function renderJobList() {
     const st = JOB_STATUS[j.status] || JOB_STATUS.ativo;
     return `
     <li>
-      <button class="job-item ${j.id === ui.activeJobId ? 'is-active' : ''}" data-job-id="${j.id}">
+      <button class="job-item ${j.id === ui.activeJobId ? 'is-active' : ''}" data-job-id="${j.id}" data-open-job="${j.id}">
         <span class="job-item-top">
           <strong>${escapeHtml(j.title)}</strong>
           <em class="tag" style="color:${st.color};border-color:${st.color}55">${st.label}</em>
@@ -1458,6 +1548,48 @@ function renderRecentNotes() {
     </li>`).join('');
 }
 
+function renderActiveJobs() {
+  const list = jobs
+    .filter(j => j.status !== 'concluido')
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, 5);
+  const box = el('active-jobs-list');
+  if (!box) return;
+  if (!list.length) {
+    box.innerHTML = '<li class="empty">Nenhum trabalho ativo.</li>';
+    return;
+  }
+  box.innerHTML = list.map(j => {
+    const p = jobProgress(j);
+    const st = JOB_STATUS[j.status] || JOB_STATUS.ativo;
+    return `
+      <li data-open-job="${j.id}" style="cursor:pointer">
+        <span class="t">${escapeHtml(j.title)}</span>
+        <span class="r tag" style="color:${st.color};border-color:${st.color}55">${st.label} · ${p.done}/${p.total}</span>
+      </li>`;
+  }).join('');
+}
+
+function renderRecentLinks() {
+  const all = [];
+  jobs.forEach(j => (j.links || []).forEach(l => all.push({ ...l, jobId: j.id, createdAt: j.updatedAt })));
+  const list = all.slice(0, 6);
+  const box = el('recent-links-list');
+  if (!box) return;
+  if (!list.length) {
+    box.innerHTML = '<li class="empty">Nenhum destaque ainda.</li>';
+    return;
+  }
+  box.innerHTML = list.map(l => {
+    const job = jobs.find(j => j.id === l.jobId);
+    return `
+      <li>
+        <a class="t" href="${safeUrl(l.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(l.label)}</a>
+        <span class="r tag">${job ? escapeHtml(job.title) : 'trabalho'}</span>
+      </li>`;
+  }).join('');
+}
+
 /* ================= notes ================= */
 const escapeHtml = s => String(s ?? '').replace(/[&<>"']/g, c =>
   ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
@@ -1600,12 +1732,22 @@ function renderNoteList() {
     box.innerHTML = '<li class="empty">Nenhuma nota. Crie uma!</li>';
     return;
   }
-  box.innerHTML = list.map(n => `
+  box.innerHTML = list.map(n => {
+    const metaParts = [];
+    const area = (n.area || '').trim();
+    const subarea = (n.subarea || '').trim();
+    if (area) metaParts.push(escapeHtml(area));
+    if (subarea) metaParts.push(escapeHtml(subarea));
+    const tags = (n.tags || []).slice(0, 2).map(escapeHtml).join(' • ');
+    if (tags) metaParts.push(tags);
+    const meta = metaParts.join(' • ') || 'Sem tags';
+    return `
     <button class="note-item ${n.id === ui.activeNoteId ? 'is-active' : ''}" data-note-id="${n.id}">
       <strong>${n.pinned ? '📌 ' : ''}${escapeHtml(n.title || 'Sem título')}</strong>
-      <p>${escapeHtml(n.content.replace(/[#*`>-]/g, '').trim().slice(0, 70) || 'Vazia')}</p>
-      <small>${fmtDateTime(n.updatedAt)}</small>
-    </button>`).join('');
+      <span class="n-meta">${meta}</span>
+      <span class="n-date">${fmtDate(n.updatedAt)}</span>
+    </button>`;
+  }).join('');
 }
 
 function renderEditor() {
@@ -1615,23 +1757,31 @@ function renderEditor() {
     n = notes[0];
   }
   const has = !!n;
-  ['note-title', 'note-tags', 'note-content'].forEach(id => {
-    el(id).disabled = !has;
-    el(id).style.opacity = has ? '' : '.5';
+  ['note-title', 'note-tags', 'note-content', 'note-area', 'note-subarea'].forEach(id => {
+    const e = el(id);
+    if (e) {
+      e.disabled = !has;
+      e.style.opacity = has ? '' : '.5';
+    }
   });
-  el('note-editor').querySelector('.editor-toolbar').style.opacity = has ? '' : '.5';
+  const toolbarNote = el('note-editor')?.querySelector('.editor-toolbar');
+  if (toolbarNote) toolbarNote.style.opacity = has ? '' : '.5';
 
   if (!n) {
-    el('note-title').value = '';
-    el('note-tags').value = '';
-    el('note-content').value = '';
-    el('note-meta').textContent = '0 palavras • 0 caracteres';
+    if (el('note-title')) el('note-title').value = '';
+    if (el('note-tags')) el('note-tags').value = '';
+    if (el('note-area')) el('note-area').value = '';
+    if (el('note-subarea')) el('note-subarea').value = '';
+    if (el('note-content')) el('note-content').value = '';
+    if (el('note-meta')) el('note-meta').textContent = '0 palavras • 0 caracteres';
     renderPreview();
     return;
   }
-  el('note-title').value = n.title;
-  el('note-tags').value = n.tags.join(', ');
-  el('note-content').value = n.content;
+  if (el('note-title')) el('note-title').value = n.title || '';
+  if (el('note-tags')) el('note-tags').value = (n.tags || []).join(', ');
+  if (el('note-area')) el('note-area').value = n.area || '';
+  if (el('note-subarea')) el('note-subarea').value = n.subarea || '';
+  if (el('note-content')) el('note-content').value = n.content || '';
   updateNoteMeta();
   renderPreview();
 }
@@ -1683,6 +1833,8 @@ function createNote() {
     content: '',
     tags: [],
     pinned: false,
+    area: '',
+    subarea: '',
     createdAt: Date.now(),
     updatedAt: Date.now()
   };
@@ -1737,6 +1889,8 @@ function renderAll() {
   renderSubjectBars();
   renderUpcoming();
   renderRecentNotes();
+  renderActiveJobs();
+  renderRecentLinks();
   renderTaskList();
   renderJobList();
   renderJobDetail();
@@ -1749,6 +1903,7 @@ function renderAll() {
   el('task-sort').value = ui.filters.sort;
   el('item-filter-priority').value = ui.jobFilters.priority;
   el('item-filter-status').value = ui.jobFilters.status;
+  if (el('job-filter-status')) el('job-filter-status').value = ui.jobFilterStatus;
 }
 
 /* ================= task modal ================= */
@@ -1855,6 +2010,8 @@ function seedData() {
       id: uid() + 'n1', title: 'JavaScript — Array methods',
       tags: ['JavaScript', 'referência'],
       pinned: true,
+      area: 'Programação',
+      subarea: 'JavaScript',
       createdAt: base, updatedAt: base,
       content: `# Array methods\n\n\`\`\`js\nconst nums = [1, 2, 3, 4, 5];\n\nnums.map(n => n * 2);      // [2,4,6,8,10]\nnums.filter(n => n > 3);   // [4,5]\nnums.reduce((a, b) => a + b, 0); // 15\nnums.flatMap(n => [n, n]);  // achatar\n\`\`\`\n\n- **map** → novo array do mesmo tamanho\n- **filter** → novo array menor\n- **reduce** → um único valor\n- **splice** → muta o array original`
     },
@@ -1862,6 +2019,8 @@ function seedData() {
       id: uid() + 'n2', title: 'Git — comandos do dia a dia',
       tags: ['Git'],
       pinned: false,
+      area: 'Ferramentas',
+      subarea: 'Git',
       createdAt: base - 1e6, updatedAt: base - 5e5,
       content: `# Comandos úteis\n\n1. \`git switch -c nova-branch\`\n2. \`git add -p\` — stage por bloco\n3. \`git log --oneline --graph\`\n4. \`git restore --staged <file>\`\n5. \`git rebase -i HEAD~3\` para reescrever commits locais\n\n**Dica:** sempre \`git status\` antes de commitar.`
     },
@@ -1869,6 +2028,8 @@ function seedData() {
       id: uid() + 'n3', title: 'Python — erros comuns',
       tags: ['Python'],
       pinned: false,
+      area: 'Programação',
+      subarea: 'Python',
       createdAt: base - 2e6, updatedAt: base - 2e6,
       content: `Erros que mais caem em prova:\n\n- Mutável vs imutável: listas e dicts podem mudar in-place\n- Late binding em closures dentro de loops\n- \`is\` vs \`==\` para comparar strings vazias\n- Escopo de comprehension em Python 3`
     }
@@ -1981,8 +2142,17 @@ function importData(file) {
   reader.onload = e => {
     try {
       const data = JSON.parse(e.target.result);
-      if (Array.isArray(data.tasks)) tasks = data.tasks;
-      if (Array.isArray(data.notes)) notes = data.notes;
+      if (Array.isArray(data.tasks)) {
+        tasks = data.tasks.map(t => Object.assign({ subtasks: [] }, t));
+        tasks.forEach(t => { if (!Array.isArray(t.subtasks)) t.subtasks = []; });
+      }
+      if (Array.isArray(data.notes)) {
+        notes = data.notes.map(n => ({
+          ...n,
+          area: n.area || '',
+          subarea: n.subarea || ''
+        }));
+      }
       if (data.prefs) prefs = Object.assign({}, defaultPrefs, data.prefs);
       if (Array.isArray(data.subjects) && data.subjects.length) {
         subjects = Array.from(new Set(data.subjects.map(s => String(s).trim()).filter(Boolean)));
@@ -1990,9 +2160,28 @@ function importData(file) {
         subjects = migrateSubjects();
       }
       if (Array.isArray(data.jobs)) {
-        jobs = data.jobs.map(j => Object.assign({ items: [], links: [], note: { content: '' } }, j));
+        jobs = data.jobs.map(j => ({
+          id: j.id || uid(),
+          title: j.title || 'Trabalho',
+          company: j.company || '',
+          status: JOB_STATUS[j.status] ? j.status : 'ativo',
+          due: j.due || '',
+          desc: j.desc || '',
+          items: (Array.isArray(j.items) ? j.items : []).map(normalizeItem).filter(Boolean),
+          links: (Array.isArray(j.links) ? j.links : []).map(l => ({
+            id: l.id || uid(),
+            label: l.label || l.url || 'link',
+            url: l.url || ''
+          })).filter(l => l.url),
+          note: { content: (j.note && j.note.content) || '', updatedAt: (j.note && j.note.updatedAt) || Date.now() },
+          createdAt: j.createdAt || Date.now(),
+          updatedAt: j.updatedAt || Date.now()
+        }));
       }
-      if (Array.isArray(data.history)) history = data.history;
+      if (Array.isArray(data.history)) {
+        history = data.history.filter(h => h && h.id && h.title);
+      }
+      purgeHistory();
       ui.filters.subject = '';
       ui.activeNoteId = notes[0]?.id || null;
       ui.activeJobId = jobs[0]?.id || null;
@@ -2204,6 +2393,19 @@ function bindEvents() {
       return;
     }
 
+    const openJobMini = e.target.closest('[data-open-job]');
+    if (openJobMini) {
+      const job = jobs.find(j => j.id === openJobMini.dataset.openJob);
+      if (job) {
+        ui.activeJobId = job.id;
+        ui.jobNoteLoadedFor = null;
+        setView('jobs');
+        renderJobList();
+        renderJobDetail();
+        return;
+      }
+    }
+
     const openNote = e.target.closest('[data-open-note]');
     if (openNote) {
       ui.activeNoteId = openNote.dataset.openNote;
@@ -2227,6 +2429,9 @@ function bindEvents() {
   el('task-sort').addEventListener('change', e => { ui.filters.sort = e.target.value; renderTaskList(); });
 
   el('job-search').addEventListener('input', e => { ui.jobSearch = e.target.value; renderJobList(); });
+  if (el('job-filter-status')) {
+    el('job-filter-status').addEventListener('change', e => { ui.jobFilterStatus = e.target.value; renderJobList(); });
+  }
   el('item-filter-priority').addEventListener('change', e => { ui.jobFilters.priority = e.target.value; renderJobItems(); });
   el('item-filter-status').addEventListener('change', e => { ui.jobFilters.status = e.target.value; renderJobItems(); });
 
@@ -2339,10 +2544,12 @@ function bindEvents() {
     if (cb) cb();
   });
 
-  el('note-title').addEventListener('input', e => updateNote({ title: e.target.value }));
-  el('note-tags').addEventListener('input', e =>
-    updateNote({ tags: e.target.value.split(',').map(s => s.trim()).filter(Boolean) }));
-  el('note-content').addEventListener('input', e => {
+  if (el('note-title')) el('note-title').addEventListener('input', e => updateNote({ title: e.target.value }));
+  if (el('note-area')) el('note-area').addEventListener('input', e => updateNote({ area: e.target.value }));
+  if (el('note-subarea')) el('note-subarea').addEventListener('input', e => updateNote({ subarea: e.target.value }));
+  if (el('note-tags')) el('note-tags').addEventListener('input', e =>
+    updateNote({ tags: (e.target.value || '').split(',').map(s => s.trim()).filter(Boolean) }));
+  if (el('note-content')) el('note-content').addEventListener('input', e => {
     updateNoteMeta();
     renderPreview();
     updateNote({ content: e.target.value });
@@ -2444,6 +2651,14 @@ function bindEvents() {
     if (typing) return;
     if (e.key === '/') { e.preventDefault(); el('global-search').focus(); }
     if (e.key === 'n' || e.key === 'N') { e.preventDefault(); openTaskModal(); }
+    if (e.key === 'j' || e.key === 'J') { e.preventDefault(); openJobModal(); }
+    if (e.key === 'h' || e.key === 'H') { e.preventDefault(); setView('history'); }
+    if (e.key === 'w' || e.key === 'W') {
+      const job = activeJob();
+      if (!job) { setView('jobs'); toast('Abra um trabalho para adicionar destaque', 'info'); return; }
+      setView('jobs');
+      el('link-label').focus();
+    }
   });
 
   function tick() {

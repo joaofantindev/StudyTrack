@@ -30,7 +30,7 @@ Não existe `package.json`, `tsconfig`, linter, formatter nem test runner.
 Tudo abaixo já está implementado, com CSS e wired nos eventos:
 
 - **Módulo Trabalhos** (`#view-jobs`) — 1 registro por trabalho:
-  - checklist próprio com **prioridade / prazo / anotação** (igualltarefas)
+  - checklist próprio com **prioridade / prazo / anotação** (igual às tarefas)
   - **notas em Markdown** com o mesmo editor de Notas (preview, modos, baixar `.md`)
   - **destaques**: lista de URLs (empresa, repositório, docs) com abrir/copiar/remover
   - modais: `#job-modal`, `#work-item-modal`
@@ -88,7 +88,7 @@ Hoje só existe o stat "Trabalhos".
 
 ### 2.6 Plano de fundo
 - confirmar antes de **Remover**
-- avisar o tamanho final antes de gravar (hoisó falha e volta atrás)
+- avisar o tamanho final antes de gravar (hoje só falha e volta atrás)
 - evaluar `indexedDB` se a imagem não couber no `localStorage`
 - se mudar para `prefs`, não esquecer que hoje é uma chave própria (`K.wallpaper`)
 
@@ -110,10 +110,10 @@ Ordem por risco/benefício:
    rodando por `node`/Playwright
 3. **Busca unificada**: hoje filtra tarefas, notas, trabalhos, itens e histórico —
    falta incluir **destaques (URLs)** e resultados agrupados
-4. **Heatmap de atividade** (dias conclúdos) a partir do histórico + `completedAt`
+4. **Heatmap de atividade** (dias concluídos) a partir do histórico + `completedAt`
 5. **Recorrência**: tarefa semanal (`repeat`), usando `shiftISO`
 6. **Pomodoro** no statusbar
-7. **Separar `js/app.js`** em módulos ES ou plusieurs arquivos
+7. **Separar `js/app.js`** em módulos ES ou em vários arquivos
    ⚠️ isso quebra "no build": `<script type="module">` exige servidor
    (não funciona com duplo clique). Decidir antes.
 8. PWA instalável / sync opcional (continua fora do escopo "offline-first")
